@@ -10,19 +10,8 @@ from rdkit import Chem
 
 
 @dataclass
-class ComponentDatapoint(MoleculeDatapoint):
-    G_d : np.ndarray | None = None
-    """A numpy array of shape ``1 x d_gd``, where ``d_gd`` is the number of additional descriptors 
-    that will be concatenated to the learned graph representation after atom-to-molecule 
-    aggregation, but before component-to-mixture aggregation"""
-    w_fp: float = 1.0
-    """the weight of the molecule's learned fingerprint when averaging in the mixture"""
-
-
-@dataclass
 class _MixtureDatapointMixin:
     mols: list[Chem.Mol]
-    """the mixture associated with this datapoint"""
 
     @classmethod
     def from_smis(
@@ -40,6 +29,35 @@ class _MixtureDatapointMixin:
         kwargs["name"] = "|".join(smis) if "name" not in kwargs else kwargs["name"]
 
         return cls(mols, *args, **kwargs)
+
+
+@dataclass
+class ComponentDatapoint(_DatapointMixin, _MixtureDatapointMixin):
+    V_fs: list[np.ndarray] | None = None
+    """A list of optional V_f numpy arrays, one for each molecule in the mixture"""
+    E_fs: list[np.ndarray] | None = None
+    """A list of optional E_f numpy arrays, one for each molecule in the mixture"""
+    V_ds: list[np.ndarray] | None = None
+    """A list of optional V_d numpy arrays, one for each molecule in the mixture"""
+    G_ds: list[np.ndarray] | None = None
+    """A list of numpy arrays of shape ``1 x d_gd``, where ``d_gd`` is the number of additional  
+    descriptors that will be concatenated to the learned graph representation after atom-to-molecule 
+    aggregation, but before component-to-mixture aggregation"""
+    w_fps: list[float] | np.ndarray | float = 1.0
+    """The predetermined weights of the molecule's learned fingerprints when averaging in the mixture. If a numpy array, it should be 1D with length equal to the number of molecules in the mixture. If a single float is given, it is applied to all molecules."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        n = len(self.mols)
+
+        self.w_fps = np.asarray(self.w_fps, dtype=float)
+        if self.w_fps.ndim == 0:
+            self.w_fps = np.full(n, self.w_fps.item())
+
+        for name in ("w_fps", "V_fs", "E_fs", "V_ds", "G_ds"):
+            val = getattr(self, name)
+            if val is not None and len(val) != n:
+                raise ValueError(f"{name} has length {len(val)}, expected {n}")
 
 
 @dataclass

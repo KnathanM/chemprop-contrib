@@ -13,10 +13,29 @@ from chemprop_contrib.mixtures.data.molgraph import ComponentMolGraph, MixtureGr
 
 # See also chemprop.data.collate.BatchMolGraph
 @dataclass(repr=False, eq=False, slots=True)
-class BatchComponentMolGraph(BatchMolGraph):
-    mgs: InitVar[Sequence[ComponentMolGraph | None]]
+class BatchComponentMolGraph:
+    """A :class:`BatchComponentMolGraph` represents a batch of :class:`ComponentMolGraph`\s. Each :class:`ComponentMolGraph`
+
+    It has all the attributes of a ``MolGraph`` with the addition of the ``batch`` attribute. This
+    class is intended for use with data loading, so it uses :obj:`~torch.Tensor`\s to store data
+    """
+
+    mgs: InitVar[Iterable[Iterable[ComponentMolGraph]]]
+    """A list of individual :class:`MolGraph`\s to be batched together"""
+    V: Tensor = field(init=False)
+    """the atom feature matrix"""
+    E: Tensor = field(init=False)
+    """the bond feature matrix"""
+    edge_index: Tensor = field(init=False)
+    """an tensor of shape ``2 x E`` containing the edges of the graph in COO format"""
+    rev_edge_index: Tensor = field(init=False)
+    """A tensor of shape ``E`` that maps from an edge index to the index of the source of the
+    reverse edge in the ``edge_index`` attribute."""
+    batch: Tensor = field(init=False)
+    """the index of the parent :class:`MolGraph` in the batched graph"""
     G: Tensor = field(init=False)
     w_fps: Tensor = field(init=False)
+    mixture_batch: Tensor = field(init=False)
 
     def __post_init__(self, mgs):
         self._BatchMolGraph__size = len(mgs)
@@ -61,7 +80,7 @@ class BatchComponentMolGraph(BatchMolGraph):
 
 # See also chemprop.data.collate.TrainingBatch
 class BatchComponentDatum(NamedTuple):
-    bmg: BatchComponentMolGraph | None
+    bmg: BatchComponentMolGraph
     V_d: Tensor | None
     X_d: Tensor | None
     Y: Tensor | None
@@ -72,11 +91,11 @@ class BatchComponentDatum(NamedTuple):
 
 # See also chemprop.data.collate.collate_batch
 def collate_component(batch: Iterable[ComponentDatum]) -> BatchComponentDatum:
-    mgs, V_ds, x_ds, ys, weights, lt_masks, gt_masks = zip(*batch)
+    mgss, V_dss, x_ds, ys, weights, lt_masks, gt_masks = zip(*batch)
 
     return BatchComponentDatum(
-        BatchComponentMolGraph(mgs) if any(mg is not None for mg in mgs) else None,
-        None if V_ds[0] is None else torch.from_numpy(np.concatenate(V_ds)).float(),
+        BatchComponentMolGraph(mgss),
+        None if V_dss[0] is None else torch.from_numpy(np.concatenate([V_d for V_ds in V_dss for V_d in V_ds], axis=0)).float(),
         None if x_ds[0] is None else torch.from_numpy(np.array(x_ds)).float(),
         None if ys[0] is None else torch.from_numpy(np.array(ys)).float(),
         torch.tensor(weights, dtype=torch.float).unsqueeze(1),
@@ -122,7 +141,7 @@ def collate_mixturegraph(batch: Iterable[MixtureDatum]) -> BatchMixtureDatum:
 # See also chemprop.data.collate.MulticomponentTrainingBatch
 class MixtureBatch(NamedTuple):
     bmgs: list[BatchMolGraph | BatchComponentMolGraph | BatchMixtureGraph]
-    V_ds: list[Tensor | None]
+    V_ds: list[Tensor | list[Tensor] | None]
     X_d: Tensor | None
     Y: Tensor | None
     w: Tensor

@@ -45,8 +45,8 @@ class MixtureMPNN(MulticomponentMPNN):
 
     def fingerprint(
         self,
-        bmgs: Iterable[BatchMolGraph | BatchComponentMolGraph | BatchMixtureGraph | None],
-        V_ds: Iterable[Tensor],
+        bmgs: Iterable[Iterable[BatchMolGraph | BatchComponentMolGraph | BatchMixtureGraph | None]],
+        V_ds: Iterable[Iterable[Tensor]],
         X_d: Tensor | None = None,
     ) -> Tensor:
         H_vs = self.message_passing(bmgs, V_ds)

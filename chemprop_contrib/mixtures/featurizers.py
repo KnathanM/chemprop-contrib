@@ -26,7 +26,7 @@ class _EmptyMolFeaturizer(VectorFeaturizer[Mol]):
 
 
 @dataclass
-class ComponentMolGraphFeaturizer(Featurizer[Mol | None, ComponentMolGraph | None]):
+class ComponentMolGraphFeaturizer(Featurizer[list[Chem.Mol], list[ComponentMolGraph]]):
     """A :class:`ComponentMolGraphFeaturizer` produces :class:`ComponentMolGraph`s.
 
     Parameters
@@ -61,66 +61,71 @@ class ComponentMolGraphFeaturizer(Featurizer[Mol | None, ComponentMolGraph | Non
 
     def __call__(
         self,
-        mol: Chem.Mol | None,
-        atom_features_extra: np.ndarray | None = None,
-        bond_features_extra: np.ndarray | None = None,
-        mol_features_extra: np.ndarray | None = None,
-        w_fp: float = 1.0,
-    ) -> ComponentMolGraph | None:
-        if mol is None:
-            return None
+        mols: Iterable[Chem.Mol],
+        atom_features_extras: Iterable[np.ndarray] | None = None,
+        bond_features_extras: Iterable[np.ndarray] | None = None,
+        mol_features_extras: Iterable[np.ndarray] | None = None,
+        w_fps: np.ndarray | float = 1.0,
+    ) -> list[ComponentMolGraph]:
+        
+        if isinstance(w_fps, (float, int)):
+            w_fps = np.full(len(list(mols)), w_fps, dtype=float)
 
-        n_atoms = mol.GetNumAtoms()
-        n_bonds = mol.GetNumBonds()
+        mgs = []
+        for mol, atom_features_extra, bond_features_extra, mol_features_extra, w_fp in zip(mols, atom_features_extras, bond_features_extras, mol_features_extras, w_fps, strict=True):
+            n_atoms = mol.GetNumAtoms()
+            n_bonds = mol.GetNumBonds()
 
-        if atom_features_extra is not None and len(atom_features_extra) != n_atoms:
-            raise ValueError(
-                "Input molecule must have same number of atoms as `len(atom_features_extra)`!"
-                f"got: {n_atoms} and {len(atom_features_extra)}, respectively"
-            )
-        if bond_features_extra is not None and len(bond_features_extra) != n_bonds:
-            raise ValueError(
-                "Input molecule must have same number of bonds as `len(bond_features_extra)`!"
-                f"got: {n_bonds} and {len(bond_features_extra)}, respectively"
-            )
-        if mol_features_extra is not None and mol_features_extra.ndim != 1:
-            raise ValueError(
-                "`graph_features_extra` must be a 1-D array! "
-                f"got: {mol_features_extra.ndim}-D array with shape {mol_features_extra.shape}"
-            )
+            if atom_features_extra is not None and len(atom_features_extra) != n_atoms:
+                raise ValueError(
+                    "Input molecule must have same number of atoms as `len(atom_features_extra)`!"
+                    f"got: {n_atoms} and {len(atom_features_extra)}, respectively"
+                )
+            if bond_features_extra is not None and len(bond_features_extra) != n_bonds:
+                raise ValueError(
+                    "Input molecule must have same number of bonds as `len(bond_features_extra)`!"
+                    f"got: {n_bonds} and {len(bond_features_extra)}, respectively"
+                )
+            if mol_features_extra is not None and mol_features_extra.ndim != 1:
+                raise ValueError(
+                    "`graph_features_extra` must be a 1-D array! "
+                    f"got: {mol_features_extra.ndim}-D array with shape {mol_features_extra.shape}"
+                )
 
-        if n_atoms == 0:
-            V = np.zeros((1, self.atom_fdim), dtype=np.single)
-        else:
-            V = np.array([self.atom_featurizer(a) for a in mol.GetAtoms()], dtype=np.single)
-        E = np.empty((2 * n_bonds, self.bond_fdim))
-        edge_index = [[], []]
+            if n_atoms == 0:
+                V = np.zeros((1, self.atom_fdim), dtype=np.single)
+            else:
+                V = np.array([self.atom_featurizer(a) for a in mol.GetAtoms()], dtype=np.single)
+            E = np.empty((2 * n_bonds, self.bond_fdim))
+            edge_index = [[], []]
 
-        if atom_features_extra is not None:
-            V = np.hstack((V, atom_features_extra))
+            if atom_features_extra is not None:
+                V = np.hstack((V, atom_features_extra))
 
-        i = 0
-        for bond in mol.GetBonds():
-            x_e = self.bond_featurizer(bond)
-            if bond_features_extra is not None:
-                x_e = np.concatenate((x_e, bond_features_extra[bond.GetIdx()]), dtype=np.single)
+            i = 0
+            for bond in mol.GetBonds():
+                x_e = self.bond_featurizer(bond)
+                if bond_features_extra is not None:
+                    x_e = np.concatenate((x_e, bond_features_extra[bond.GetIdx()]), dtype=np.single)
 
-            E[i : i + 2] = x_e
+                E[i : i + 2] = x_e
 
-            u, v = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
-            edge_index[0].extend([u, v])
-            edge_index[1].extend([v, u])
+                u, v = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
+                edge_index[0].extend([u, v])
+                edge_index[1].extend([v, u])
 
-            i += 2
+                i += 2
 
-        rev_edge_index = np.arange(len(E)).reshape(-1, 2)[:, ::-1].ravel()
-        edge_index = np.array(edge_index, int)
+            rev_edge_index = np.arange(len(E)).reshape(-1, 2)[:, ::-1].ravel()
+            edge_index = np.array(edge_index, int)
 
-        G = self.mol_featurizer(mol)
-        if mol_features_extra is not None:
-            G = np.concatenate([G, mol_features_extra], dtype=np.single)
+            G = self.mol_featurizer(mol)
+            if mol_features_extra is not None:
+                G = np.concatenate([G, mol_features_extra], dtype=np.single)
 
-        return ComponentMolGraph(V, E, edge_index, rev_edge_index, G, w_fp)
+            mgs.append(ComponentMolGraph(V, E, edge_index, rev_edge_index, G, w_fp))
+
+        return mgs
 
 
 class ComponentMolGraphCache:
@@ -131,20 +136,20 @@ class ComponentMolGraphCache:
 
     def __init__(
         self,
-        mols: Iterable[Mol],
-        V_fs: Iterable[np.ndarray | None],
-        E_fs: Iterable[np.ndarray | None],
-        G_d: Iterable[np.ndarray | None],
-        w_fps: np.ndarray,
-        featurizer: Featurizer[Mol, ComponentMolGraph],
+        molss: Iterable[Iterable[Mol]],
+        V_fss: Iterable[Iterable[np.ndarray | None]],
+        E_fss: Iterable[Iterable[np.ndarray | None]],
+        G_dss: Iterable[np.ndarray | None],
+        w_fpss: np.ndarray,
+        featurizer: Featurizer[list[Chem.Mol], list[ComponentMolGraph]],
         n_workers: int = 0,
     ):
-        self._mgs = parallel_execute(featurizer, zip(mols, V_fs, E_fs, G_d, w_fps), n_workers=n_workers)
+        self._mgs = parallel_execute(featurizer, zip(molss, V_fss, E_fss, G_dss, w_fpss), n_workers=n_workers)
 
     def __len__(self) -> int:
         return len(self._mgs)
 
-    def __getitem__(self, index: int) -> ComponentMolGraph:
+    def __getitem__(self, index: int) -> list[ComponentMolGraph]:
         return self._mgs[index]
 
 
@@ -156,25 +161,25 @@ class ComponentMolGraphCacheOnTheFly:
 
     def __init__(
         self,
-        mols: Iterable[Mol],
-        V_fs: Iterable[np.ndarray | None],
-        E_fs: Iterable[np.ndarray | None],
-        G_d: Iterable[np.ndarray | None],
-        w_fps: np.ndarray,
-        featurizer: Featurizer[Mol, ComponentMolGraph],
+        molss: Iterable[Iterable[Mol]],
+        V_fss: Iterable[Iterable[np.ndarray] | None],
+        E_fss: Iterable[Iterable[np.ndarray] | None],
+        G_dss: Iterable[Iterable[np.ndarray] | None],
+        w_fpss: np.ndarray,
+        featurizer: Featurizer[list[Chem.Mol], list[ComponentMolGraph]],
     ):
-        self._mols = list(mols)
-        self._V_fs = list(V_fs)
-        self._E_fs = list(E_fs)
-        self._G_d = list(G_d)
-        self.w_fps = w_fps
+        self._molss = list(molss)
+        self._V_fss = list(V_fss)
+        self._E_fss = list(E_fss)
+        self._G_dss = list(G_dss)
+        self.w_fpss = w_fpss
         self._featurizer = featurizer
 
     def __len__(self) -> int:
-        return len(self._mols)
+        return len(self._molss)
 
-    def __getitem__(self, index: int) -> ComponentMolGraph:
-        return self._featurizer(self._mols[index], self._V_fs[index], self._E_fs[index], self._G_d[index], self.w_fps[index])
+    def __getitem__(self, index: int) -> list[ComponentMolGraph]:
+        return self._featurizer(self._molss[index], self._V_fss[index], self._E_fss[index], self._G_d[index], self.w_fpss[index])
 
 
 class MultiHotMolInteractionFeaturizer(VectorFeaturizer[Sequence[Mol]]):

@@ -6,6 +6,7 @@ import torch
 from chemprop.data import BatchMolGraph
 from chemprop.nn.agg import Aggregation
 from chemprop.nn.hparams import HasHParams
+from chemprop.nn.transforms import ScaleTransform
 from torch import Tensor, nn
 
 from chemprop_contrib.mixtures.data import BatchComponentMolGraph, BatchMixtureGraph, BatchNodesOnly
@@ -23,19 +24,14 @@ class MixtureAggregation(nn.Module, HasHParams):
 
     Parameters
     ----------
-    graph_agg: Aggregation
+    graph_agg : Aggregation
         an instance of a chemprop Aggregation for the node to graph aggregation
-    groups: Sequence[Sequence[int]]
+    groups : Sequence[Sequence[int]]
         the indices of the molecules/components split into groups, e.g. [[0],[1,2]] for solute in
         binary solvent
-    fp_dims: Sequence[int]
-        the dimensions of the final molecule embeddings, used in some mixture aggregation schemes
-        and for padding missing components with zeros. If `mixmp` is not None, it is the output
-        dimensions of that module. Otherwise it is the output dimensions of the 
-        `MixtureMulticomponentMessagePassing` module plus the length of any molecule features that
-        get concatenated to the learned representation, either via a mol_featurizer in 
-        `ComponentMolGraphFeaturizer` or extra mol features given via the datapoints.
-    mixmp: MixtureMessagePassing | MolecularMessagePassing | InteractionMessagePassing | None = None
+    fp_dims : Sequence[int]
+        the dimensions of the final group embeddings
+    mixmp : MixtureMessagePassing | MolecularMessagePassing | InteractionMessagePassing | None = None
         the optional message passing block for passing messages between molecule embeddings
     """
     output_dim: int
@@ -49,15 +45,16 @@ class MixtureAggregation(nn.Module, HasHParams):
         | MolecularMessagePassing
         | InteractionMessagePassing
         | None = None,
+        G_d_transform: ScaleTransform | None = None,
     ):
         if mixmp is not None:
             if len(set(fp_dims)) > 1:
                 raise ValueError(
-                    "If using mixmp, the fp_dim for each component in a datapoint must be the same."
+                    "If using mixmp, the fp_dim for each group must be the same."
                     )
             if fp_dims[0] != mixmp.output_dim:
                 raise ValueError(
-                    "If using mixmp, the fp_dim for each component must be equal to mixmp.output_dim."
+                    "If using mixmp, the fp_dim must be equal to mixmp.output_dim."
                 )
 
         super().__init__()
@@ -75,26 +72,30 @@ class MixtureAggregation(nn.Module, HasHParams):
 
     def _aggregate_components(
         self,
-        H_vs: list[Tensor | None],
-        bmgs: list[BatchMolGraph | BatchComponentMolGraph | BatchMixtureGraph | None],
-    ) -> tuple[list[Tensor], list[Tensor], list[Tensor]]:
+        H_vs: list[list[Tensor | None]],
+        bmgs: list[list[BatchMolGraph | BatchComponentMolGraph | BatchMixtureGraph | None]],
+    ) -> tuple[list[list[Tensor]], list[list[Tensor]], list[list[Tensor]]]:
         """Aggregate all atom representations into per-component mixture representation"""
+        # flatten because groups don't matter for the operations in this function
+        H_vs = [item for sublist in H_vs for item in sublist]
+        bmgs = [item for sublist in bmgs for item in sublist]
+
         # Atom-to-component aggregation
         Hs, w_fps, Hs_batch = [], [], []
 
         for H_v, bmg in zip(H_vs, bmgs):
             if isinstance(bmg, BatchMixtureGraph):
                 continue
-            # If all datapoints in a batch are missing a component, skip the bmg for that component
             if bmg is None:
-                continue
+                continue  # Component missing in this batch
 
+            # `H_batch` says which datapoints contribute to the bmg of this i-th component.
             H_batch, batch_contiguous = torch.unique(bmg.batch, return_inverse=True)
             H = self.graph_agg(H_v, batch_contiguous)
             if isinstance(bmg, BatchComponentMolGraph):
                 H = torch.concat([H, bmg.G], dim=1)
+
             Hs.append(H)
-            # The i-th element in `Hs_batch` says which datapoints have an i-th component.
             Hs_batch.append(H_batch)
             w_fps.append(getattr(bmg, "w_fps", None))
 
@@ -133,41 +134,26 @@ class MixtureAggregation(nn.Module, HasHParams):
             sizes = [b.shape[0] for b in Hs_batch]
             Hs = list(torch.split(Hs, sizes))
 
-        # Pad missing components with zeros
-        def reinsert_nones(xs, mask):
-            it = iter(xs)
-            return [None if m else next(it) for m in mask]
-
-        bmg_is_None = [bmg is None for bmg in bmgs if not isinstance(bmg, BatchMixtureGraph)]
-        Hs = reinsert_nones(Hs, bmg_is_None)
-        Hs_batch = reinsert_nones(Hs_batch, bmg_is_None)
-        w_fps = reinsert_nones(w_fps, bmg_is_None)
-
-        batch_size = next(len(bmg) for bmg in bmgs if bmg is not None)
-        device = next(H for H in Hs if H is not None).device
-
-        def pad_with_zeros(vals: Tensor | None, idx: Tensor | None, dim: int | None) -> Tensor:
-            out = torch.zeros(
-                (batch_size, dim) if dim is not None else (batch_size,), device=device
-            )
-            if vals is not None and idx is not None:
-                out[idx] = vals
-            return out
-
-        Hs = [
-            pad_with_zeros(H, H_batch, dim) for H, H_batch, dim in zip(Hs, Hs_batch, self.fp_dims)
-        ]
-        w_fps = [pad_with_zeros(w_fp, H_batch, None) for w_fp, H_batch in zip(w_fps, Hs_batch)]
-
         # Molecule-to-mixture aggregation: implemented in subclasses
 
         return Hs, w_fps, Hs_batch
+    
+    @staticmethod
+    def _infer_batch_info(
+        H_vs: list[list[Tensor | None]],
+        bmgs: list[list[BatchMolGraph | BatchComponentMolGraph | BatchMixtureGraph | None]],
+    ) -> tuple[int, torch.device, list[list[bool]]]:
+        """returns batch size, tensor device, and mask for present bmg's"""
+        batch_size = next(len(bmg) for group in bmgs for bmg in group if bmg is not None)
+        device = next(H_v for group in H_vs for H_v in group if H_v is not None).device
+        present_components_mask = [[bmg is not None for bmg in group] for group in bmgs]
+        return batch_size, device, present_components_mask
 
     @abstractmethod
     def forward(
         self,
-        H_vs: list[Tensor | None],
-        bmgs: list[BatchMolGraph | BatchComponentMolGraph | BatchMixtureGraph | None],
+        H_vs: list[list[Tensor | None]],
+        bmgs: list[list[BatchMolGraph | BatchComponentMolGraph | BatchMixtureGraph | None]],
     ) -> Tensor:
         """Aggregate component representations into a single mixture representation.
 
@@ -185,22 +171,47 @@ class ConcatAggregation(MixtureAggregation):
     """
 
     @property
-    def components_in_mixture(self) -> set[int]:
-        return {idx for group in self.groups if len(group) > 1 for idx in group}
-
-    @property
     def output_dim(self) -> int:
-        return sum(self.fp_dims) + len(self.components_in_mixture)
+        return sum(
+            len(group) * (self.fp_dims[g_idx] + int(len(group) > 1))
+            for g_idx, group in enumerate(self.groups)
+        )
 
     def forward(
         self,
-        H_vs: list[Tensor],
-        bmgs: list[BatchMolGraph | BatchComponentMolGraph | BatchMixtureGraph | None],
+        H_vs: list[list[Tensor | None]],
+        bmgs: list[list[BatchMolGraph | BatchComponentMolGraph | BatchMixtureGraph | None]],
     ) -> Tensor:
-        Hs, w_fps, _ = self._aggregate_components(H_vs, bmgs)
+        Hs, w_fps, Hs_batch = self._aggregate_components(H_vs, bmgs)
+        batch_size, device, present_components_mask = self._infer_batch_info(H_vs, bmgs)
 
-        w_fps = torch.stack([w_fps[idx] for idx in self.components_in_mixture], dim=1)
-        return torch.cat(Hs + [w_fps], 1)
+        def pad_with_zeros(vals: Tensor | None, idx: Tensor | None, dim: int | None) -> Tensor:
+            shape = (batch_size, dim) if dim is not None else (batch_size,)
+            out = torch.zeros(shape, device=device)
+            if vals is not None and idx is not None:
+                out[idx] = vals
+            return out
+
+        iter_agg_data = iter(zip(Hs, w_fps, Hs_batch))
+        collected_Hs = []
+        collected_w_fps = []
+        for dim, mask in zip(self.fp_dims, present_components_mask):
+            if len(mask) == 1:
+                H, _, b = next(iter_agg_data)
+                collected_Hs.append(pad_with_zeros(H, b, dim))
+            else:
+                for present in mask:
+                    if present:
+                        H, w, b = next(iter_agg_data)
+                        collected_Hs.append(pad_with_zeros(H, b, dim))
+                        collected_w_fps.append(pad_with_zeros(w, b, None))
+                    else:
+                        collected_Hs.append(pad_with_zeros(None, None, dim))
+                        collected_w_fps.append(pad_with_zeros(None, None, None))
+
+
+        w_fps = torch.stack(collected_w_fps, dim=1)
+        return torch.cat(collected_Hs + [w_fps], dim=1)
 
 
 class WeightedSumAggregation(MixtureAggregation):
@@ -212,26 +223,30 @@ class WeightedSumAggregation(MixtureAggregation):
 
     @property
     def output_dim(self) -> int:
-        return sum(self.fp_dims[group[0]] for group in self.groups)
+        return sum(self.fp_dims)
 
     def forward(
         self,
-        H_vs: list[Tensor],
-        bmgs: list[BatchMolGraph | BatchComponentMolGraph | BatchMixtureGraph | None],
+        H_vs: list[list[Tensor | None]],
+        bmgs: list[list[BatchMolGraph | BatchComponentMolGraph | BatchMixtureGraph | None]],
     ) -> Tensor:
-        Hs, w_fps, _ = self._aggregate_components(H_vs, bmgs)
+        Hs, w_fps, Hs_batch = self._aggregate_components(H_vs, bmgs)
+        batch_size, device, present_components_mask = self._infer_batch_info(H_vs, bmgs)
 
+        iter_agg_data = iter(zip(Hs, w_fps, Hs_batch))
         combined_Hs = []
-        for group in self.groups:
-            if len(group) == 1:
-                combined_Hs.append(Hs[group[0]])
-                continue
-            group_Hs = torch.stack([Hs[idx] for idx in group])  # n x b x d
-            group_w_fps = torch.stack([w_fps[idx] for idx in group])  # n x b
-            # n: num. components in group, b: num. datapoints in batch, d: output dim of message passing
-            combined_H = torch.einsum("nb,nbd->bd", group_w_fps, group_Hs)
-            combined_Hs.append(combined_H)
-        return torch.cat(combined_Hs, 1)
+        for dim, mask in zip(self.fp_dims, present_components_mask):
+            out = torch.zeros((batch_size, dim), device=device)
+            if len(mask) == 1:
+                H, w, b = next(iter_agg_data)
+                out[b] = H
+            else:
+                for present in mask:
+                    if present:
+                        H, w, b = next(iter_agg_data)
+                        out.index_add_(0, b, w.unsqueeze(1) * H)
+            combined_Hs.append(out)
+        return torch.cat(combined_Hs, dim=1)
 
 
 class DeepsetsAggregation(MixtureAggregation):
@@ -246,6 +261,16 @@ class DeepsetsAggregation(MixtureAggregation):
         \mathbf h = \text{concat}_g \mathbf h_g
     """
 
+    def _make_mlp(self, dim: int, hidden_dim: int | None = None) -> nn.Sequential:
+        hidden_dim = hidden_dim or dim
+        return nn.Sequential(
+            nn.Linear(dim, hidden_dim, bias=False),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim, bias=False),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, dim, bias=False),
+        )
+
     def __init__(
         self,
         graph_agg: Aggregation,
@@ -258,56 +283,43 @@ class DeepsetsAggregation(MixtureAggregation):
     ):
         super().__init__(graph_agg, groups, fp_dims, mixmp)
 
-        self.MLPs_local = nn.ModuleList([])
-        self.MLPs_global = nn.ModuleList([])
-        for group in groups:
-            # TODO: allow to set hparams for MLP by kwargs (e.g., hidden_dim, n_layers)
-            hidden_dim = self.fp_dims[group[0]]
-            if len(group) > 1:
-                self.MLPs_local.append(
-                    nn.Sequential(
-                        nn.Linear(self.fp_dims[group[0]], hidden_dim, bias=False),
-                        nn.ReLU(),
-                        nn.Linear(hidden_dim, hidden_dim, bias=False),
-                        nn.ReLU(),
-                        nn.Linear(hidden_dim, self.fp_dims[group[0]], bias=False),
-                    )
-                )
-            self.MLPs_global.append(
-                nn.Sequential(
-                    nn.Linear(self.fp_dims[group[0]], hidden_dim, bias=False),
-                    nn.ReLU(),
-                    nn.Linear(hidden_dim, hidden_dim, bias=False),
-                    nn.ReLU(),
-                    nn.Linear(hidden_dim, self.fp_dims[group[0]], bias=False),
-                )
-            )
+        # TODO: allow to set hparams for MLP by kwargs (e.g., hidden_dim, n_layers)
+        self.MLPs_local = nn.ModuleList(
+            [self._make_mlp(self.fp_dims[g_idx])
+            for g_idx, group in enumerate(groups) if len(group) > 1]
+        )
+        self.MLPs_global = nn.ModuleList(
+            [self._make_mlp(self.fp_dims[g_idx]) for g_idx in range(len(groups))]
+        )
 
     @property
     def output_dim(self) -> int:
-        return sum(self.fp_dims[group[0]] for group in self.groups)
+        return sum(self.fp_dims)
 
     def forward(
         self,
-        H_vs: list[Tensor | None],
-        bmgs: list[BatchMolGraph | BatchComponentMolGraph | BatchMixtureGraph | None],
+        H_vs: list[list[Tensor | None]],
+        bmgs: list[list[BatchMolGraph | BatchComponentMolGraph | BatchMixtureGraph | None]],
     ) -> Tensor:
-        Hs, w_fps, _ = self._aggregate_components(H_vs, bmgs)
+        Hs, w_fps, Hs_batch = self._aggregate_components(H_vs, bmgs)
+        batch_size, device, present_components_mask = self._infer_batch_info(H_vs, bmgs)
 
+        iter_agg_data = iter(zip(Hs, w_fps, Hs_batch))
         local_mlps = iter(self.MLPs_local)
         combined_Hs = []
-        for g_idx, group in enumerate(self.groups):
-            if len(group) == 1:
-                # local MLP would just nest into global MLP
-                combined_H = Hs[group[0]]
+        for g_idx, (dim, mask) in enumerate(zip(self.fp_dims, present_components_mask)):
+            local_out = torch.zeros((batch_size, dim), device=device)
+            if len(mask) == 1:
+                H, w, b = next(iter_agg_data)
+                local_out[b] = H
             else:
                 local_mlp = next(local_mlps)
-                group_w_Hs = torch.stack(
-                    [local_mlp(w_fps[idx].unsqueeze(1) * Hs[idx]) for idx in group]
-                )  # n x b x d
-                combined_H = torch.sum(group_w_Hs, dim=0)
-            combined_Hs.append(self.MLPs_global[g_idx](combined_H))
-        return torch.cat(combined_Hs, 1)
+                for present in mask:
+                    if present:
+                        H, w, b = next(iter_agg_data)
+                        local_out.index_add_(0, b, local_mlp(w.unsqueeze(1) * H))
+            combined_Hs.append(self.MLPs_global[g_idx](local_out))
+        return torch.cat(combined_Hs, dim=1)
 
 
 class AttentiveAggregation(MixtureAggregation):
@@ -334,43 +346,61 @@ class AttentiveAggregation(MixtureAggregation):
         super().__init__(graph_agg, groups, fp_dims, mixmp)
 
         self.Ws_a = nn.ModuleList(
-            [nn.Linear(self.fp_dims[group[0]], 1, bias=False) for group in groups if len(group) > 1]
+            [nn.Linear(self.fp_dims[g_idx], 1, bias=False) for g_idx, group in enumerate(groups) if len(group) > 1]
         )
 
     @property
     def output_dim(self) -> int:
-        return sum(self.fp_dims[group[0]] for group in self.groups)
+        return sum(self.fp_dims)
 
     def forward(
         self,
-        H_vs: list[Tensor | None],
-        bmgs: list[BatchMolGraph | BatchComponentMolGraph | BatchMixtureGraph | None],
+        H_vs: list[list[Tensor | None]],
+        bmgs: list[list[BatchMolGraph | BatchComponentMolGraph | BatchMixtureGraph | None]],
     ) -> Tensor:
         Hs, w_fps, Hs_batch = self._aggregate_components(H_vs, bmgs)
+        batch_size, device, present_components_mask = self._infer_batch_info(H_vs, bmgs)
 
+        iter_agg_data = iter(zip(Hs, w_fps, Hs_batch))
         attn_layers = iter(self.Ws_a)
         combined_Hs = []
-        for group in self.groups:
-            if len(group) == 1:
-                combined_Hs.append(Hs[group[0]])
+        for dim, mask in zip(self.fp_dims, present_components_mask):
+            out = torch.zeros((batch_size, dim), device=device)
+            if len(mask) == 1:
+                H, w, b = next(iter_agg_data)
+                out[b] = H
+                combined_Hs.append(out)
                 continue
 
             W_a = next(attn_layers)
-            w_Hs = torch.stack([w_fps[idx].unsqueeze(1) * Hs[idx] for idx in group])  # n x b x d
-            logits = W_a(w_Hs).squeeze(-1)  # n x b
+            w_Hs_list, b_list = [], []
+            for present in mask:
+                if present:
+                    H, w, b = next(iter_agg_data)
+                    w_Hs_list.append(w.unsqueeze(1) * H)
+                    b_list.append(b)
 
-            # Mask out batch entries with missing components (so they don't contribute to softmax)
-            mask = torch.zeros_like(logits, dtype=torch.bool)
-            for i, idx in enumerate(group):
-                if Hs_batch[idx] is not None:
-                    mask[i, Hs_batch[idx]] = True
+            w_H_flat = torch.cat(w_Hs_list, dim=0)
+            b_flat = torch.cat(b_list, dim=0)
+            logits = W_a(w_H_flat).squeeze(-1)
 
-            logits = logits.masked_fill(~mask, float("-inf"))
-            alphas = torch.softmax(logits, dim=0)
-            combined_H = torch.sum(alphas.unsqueeze(-1) * w_Hs, dim=0)
-            combined_Hs.append(combined_H)
+            # Subtract logits by max for stability
+            # Alternatively, we could use torch.softmax, but that requires zero padding missing
+            # components, which is expensive if the batch is sparse.
+            # Alternatively, we could use something like 
+            # `torch_scatter.scatter_softmax(logits, b_flat, dim=0, dim_size=batch_size)`, but that
+            # is another dependency.
+            max_per_b = torch.full((batch_size,), float("-inf"), device=device)
+            max_per_b.scatter_reduce_(0, b_flat, logits, reduce="amax", include_self=True)
+            exps = torch.exp(logits - max_per_b[b_flat])
 
-        return torch.cat(combined_Hs, 1)
+            sum_per_b = torch.zeros(batch_size, device=device)
+            sum_per_b.index_add_(0, b_flat, exps)
+            alphas = exps / sum_per_b[b_flat]
+
+            out.index_add_(0, b_flat, alphas.unsqueeze(-1) * w_H_flat)
+            combined_Hs.append(out)
+        return torch.cat(combined_Hs, dim=1)
 
 
 class Set2SetAggregation(MixtureAggregation):
@@ -415,8 +445,8 @@ class Set2SetAggregation(MixtureAggregation):
         self.processing_steps = 3
         self.lstms = nn.ModuleList(
             [
-                nn.LSTM(self.fp_dims[group[0]] * 2, self.fp_dims[group[0]])
-                for group in groups
+                nn.LSTM(self.fp_dims[g_idx] * 2, self.fp_dims[g_idx])
+                for g_idx, group in enumerate(self.groups)
                 if len(group) > 1
             ]
         )
@@ -424,49 +454,64 @@ class Set2SetAggregation(MixtureAggregation):
     @property
     def output_dim(self) -> int:
         return sum(
-            self.fp_dims[group[0]] * 2 if len(group) > 1 else self.fp_dims[group[0]]
-            for group in self.groups
+            self.fp_dims[g_idx] * 2 if len(group) > 1 else self.fp_dims[g_idx]
+            for g_idx, group in enumerate(self.groups)
         )
 
     def forward(
         self,
-        H_vs: list[Tensor | None],
-        bmgs: list[BatchMolGraph | BatchComponentMolGraph | BatchMixtureGraph | None],
+        H_vs: list[list[Tensor | None]],
+        bmgs: list[list[BatchMolGraph | BatchComponentMolGraph | BatchMixtureGraph | None]],
     ) -> Tensor:
         Hs, w_fps, Hs_batch = self._aggregate_components(H_vs, bmgs)
+        batch_size, device, present_components_mask = self._infer_batch_info(H_vs, bmgs)
 
+        iter_agg_data = iter(zip(Hs, w_fps, Hs_batch))
         lstms = iter(self.lstms)
         combined_Hs = []
-        for group in self.groups:
-            if len(group) == 1:
-                combined_Hs.append(Hs[group[0]])
+        for dim, mask in zip(self.fp_dims, present_components_mask):
+            if len(mask) == 1:
+                out = torch.zeros((batch_size, dim), device=device)
+                H, w, b = next(iter_agg_data)
+                out[b] = H
+                combined_Hs.append(out)
                 continue
 
             lstm = next(lstms)
-            w_Hs = torch.stack([w_fps[idx].unsqueeze(1) * Hs[idx] for idx in group])  # n x b x d
-            w_Hs = torch.transpose(w_Hs, 0, 1)  # b x n x d
-            b_dim, n_dim, d_dim = w_Hs.shape
+            w_Hs_list, b_list = [], []
+            for present in mask:
+                if present:
+                    H, w, b = next(iter_agg_data)
+                    w_Hs_list.append(w.unsqueeze(1) * H)
+                    b_list.append(b)
 
-            mask = torch.zeros((b_dim, n_dim), dtype=torch.bool, device=w_Hs.device)
-            for i, idx in enumerate(group):
-                if Hs_batch[idx] is not None:
-                    mask[Hs_batch[idx], i] = True
+            w_H_flat = torch.cat(w_Hs_list, dim=0)
+            b_flat = torch.cat(b_list, dim=0)
 
             h = (
-                w_Hs.new_zeros((lstm.num_layers, b_dim, d_dim)),
-                w_Hs.new_zeros((lstm.num_layers, b_dim, d_dim)),
+                w_H_flat.new_zeros((lstm.num_layers, batch_size, dim)),
+                w_H_flat.new_zeros((lstm.num_layers, batch_size, dim)),
             )
-            q_star = w_Hs.new_zeros(b_dim, d_dim * 2)
+            q_star = w_H_flat.new_zeros(batch_size, dim * 2)
 
             for _ in range(self.processing_steps):
                 q, h = lstm(q_star.unsqueeze(0), h)
-                q = q.squeeze(0)  # b x d
+                q = q.squeeze(0)
 
-                logits = (w_Hs * q.unsqueeze(1)).sum(dim=2)  # b x n
-                logits = logits.masked_fill(~mask, float("-inf"))
-                alphas = torch.softmax(logits, dim=1)  # b x n
+                logits = (w_H_flat * q[b_flat]).sum(dim=1)
 
-                r = torch.sum(w_Hs * alphas.unsqueeze(2), dim=1)  # b x d
-                q_star = torch.cat([q, r], dim=1)  # b x 2*d
+                # See note about manual softmax in `AttentiveAggregation.forward`
+                max_per_b = torch.full((batch_size,), float("-inf"), device=device)
+                max_per_b.scatter_reduce_(0, b_flat, logits, reduce="amax", include_self=True)
+                exps = torch.exp(logits - max_per_b[b_flat])
+
+                sum_per_b = torch.zeros(batch_size, device=device)
+                sum_per_b.index_add_(0, b_flat, exps)
+                alphas = exps / sum_per_b[b_flat]
+
+                r = torch.zeros((batch_size, dim), device=device)
+                r.index_add_(0, b_flat, alphas.unsqueeze(-1) * w_H_flat)
+                q_star = torch.cat([q, r], dim=1)
+
             combined_Hs.append(q_star)
-        return torch.cat(combined_Hs, 1)
+        return torch.cat(combined_Hs, dim=1)

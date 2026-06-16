@@ -24,45 +24,38 @@ class MixtureMulticomponentMessagePassing(nn.Module, HasHParams):
     ----------
     blocks : Sequence[MessagePassing]
         the invidual message-passing blocks for each group
-    groups: Sequence[Sequence[int]]
-        the indices of the molecules/components split into groups, e.g. [[0],[1,2]] for solute in
-        binary solvent
     shared : bool, default=False
         whether one block will be shared among all groups
+    n_groups : int | None, default=None
+        number of groups, required if shared=True
     """
 
     def __init__(
         self,
         blocks: Sequence[MessagePassing],
-        groups: Sequence[Sequence[int]],
         shared: bool = False,
+        n_groups: int | None = None,
     ):
         super().__init__()
         self.hparams = {
             "cls": self.__class__,
             "blocks": [block.hparams for block in blocks],
-            "groups": groups,
             "shared": shared,
+            "n_groups": n_groups,
         }
 
+        if len(blocks) == 0:
+            raise ValueError("arg 'blocks' was empty!")
         if shared and len(blocks) > 1:
-            logger.warning(
-                "More than 1 block was supplied but 'shared' was True! Using only the 0th block..."
-            )
-        elif not shared and len(blocks) != len(groups):
             raise ValueError(
-                "arg 'len(groups)' must be equal to `len(blocks)` if 'shared' is False! "
-                f"got: {len(groups)} and {len(blocks)}, respectively."
+                "More than 1 block was supplied but 'shared' was True!"
             )
+        if shared and n_groups is None:
+            raise ValueError("n_groups is required when shared=True")
 
-        self.groups = groups
+        self.n_groups = n_groups
         self.shared = shared
-        self.blocks = nn.ModuleList()
-        if shared:
-            self.blocks.extend([blocks[0]] * sum(len(g) for g in groups))
-        else:
-            for g_idx, g in enumerate(groups):
-                self.blocks.extend([blocks[g_idx]] * len(g))
+        self.blocks = nn.ModuleList([blocks[0]] * self.n_groups if shared else blocks)
 
     def __len__(self) -> int:
         return len(self.blocks)
@@ -73,14 +66,17 @@ class MixtureMulticomponentMessagePassing(nn.Module, HasHParams):
 
     def forward(
         self,
-        bmgs: Iterable[BatchMolGraph | BatchComponentMolGraph | BatchMixtureGraph | None],
-        V_ds: Iterable[Tensor | None],
-    ) -> list[Tensor | None]:
-        # If the final element in bmgs is a BatchMixtureGraph, then len(bmgs) = len(self.blocks) - 1
-        # The BatchMixtureGraph is used in agg.mixmp, not here.
+        bmgs: Iterable[Iterable[BatchMolGraph | BatchComponentMolGraph | BatchMixtureGraph | None]],
+        V_ds: Iterable[Iterable[Tensor]],
+    ) -> list[list[Tensor | None]]:
+        # If the final element in bmgs is a BatchMixtureGraph, then len(bmgs) = len(self.blocks) + 1
+        # and it is dropped by zip's truncation. The BatchMixtureGraph is used in agg.mixmp.
         return [
-            block(bmg, V_d) if bmg is not None else None
-            for block, bmg, V_d in zip(self.blocks, bmgs, V_ds)
+            [
+                block(bmg, V_d) if bmg is not None else None
+                for bmg, V_d in zip(group_bmgs, group_V_ds)
+            ]
+            for block, group_bmgs, group_V_ds in zip(self.blocks, bmgs, V_ds)
         ]
 
 
