@@ -30,7 +30,7 @@ class MixtureMessagePassing(nn.Module, HyperparametersMixin, HasHParams):
     where :math:`\tau` is the activation function; :math:`\mathbf{W}_i` and :math:`\mathbf{W}_h`
     are learned weight matrices; :math:`x_v` is the feature vector of node :math:`v`;
     :math:`\mathcal{N}(v)` is the set of neighbors of :math:`v` as given by the graph's
-    ``edge_index``; :math:`h_v^{(t)}` is the hidden representation of node :math:`v` at iteration 
+    ``edge_index``; :math:`h_v^{(t)}` is the hidden representation of node :math:`v` at iteration
     :math:`t`; :math:`m_v^{(t)}` is the message received by node :math:`v` at iteration :math:`t`;
     and :math:`t \in \{1, \dots, T\}` indexes the message-passing iterations.
     """

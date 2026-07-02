@@ -168,7 +168,9 @@ class InteractionMPNN(MulticomponentMPNN):
         return H if X_d is None else torch.cat((H, self.X_d_transform(X_d)), 1)
 
     @staticmethod
-    def _reorder_big_V(big: BatchInteractionGraph, V_d: Tensor | None) -> tuple[BatchInteractionGraph, Tensor | None]:
+    def _reorder_big_V(
+        big: BatchInteractionGraph, V_d: Tensor | None
+    ) -> tuple[BatchInteractionGraph, Tensor | None]:
         """Interaction graph nodes are ordered by sub_bmg and then batched together by datapoint.
         E.g. big.V = [node_from_MolGraph1,
                       nodes_from_MixtureMolGraph1,

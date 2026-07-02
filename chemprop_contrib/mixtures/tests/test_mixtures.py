@@ -48,8 +48,6 @@ from chemprop_contrib.mixtures.nn import (
     WeightedSumAggregation,
 )
 
-from dataclasses import fields
-
 
 @pytest.fixture(autouse=True)
 def _seed():
@@ -821,7 +819,9 @@ def test_interact_only_mixture_overfit():
     extra_molecule_descriptors = [
         np.random.rand(len(mols), N_EXTRA_MOLECULE_DESCRIPTORS) for mols in solvent_mols
     ]
-    dp_inter = [InteractionDatapoint(y=y, V_d=V_d) for y, V_d in zip(ys, extra_molecule_descriptors)]
+    dp_inter = [
+        InteractionDatapoint(y=y, V_d=V_d) for y, V_d in zip(ys, extra_molecule_descriptors)
+    ]
 
     train_dp = (dp_solutes[:6], dp_solvents[:6], dp_inter[:6])
     train_ds = [MoleculeDataset(train_dp[0]), MixtureDataset(train_dp[1])]
@@ -889,8 +889,9 @@ def test_batch_size_invariance(which_m_agg, which_i_mp):
         with torch.inference_mode():
             preds[bs] = torch.cat([model.predict_step(b, 0) for b in loader])
     for bs in (1, 2, 3):
-        assert torch.allclose(preds[bs], preds[6], atol=1e-5), \
-            f"predictions depend on batch size at bs={bs}"
+        assert torch.allclose(
+            preds[bs], preds[6], atol=1e-5
+        ), f"predictions depend on batch size at bs={bs}"
 
 
 def copy_bmg(bmg):
