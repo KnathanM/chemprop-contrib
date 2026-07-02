@@ -139,22 +139,22 @@ class InteractionMPNN(MulticomponentMPNN):
             mixture_idx = next(
                 i for i, bmg in enumerate(bmgs) if isinstance(bmg, BatchMixtureMolGraph)
             )
-            V = Hs[mixture_idx]
+            H = Hs[mixture_idx]
         else:
             big_copy, V_d = self._reorder_big_V(big_copy, V_d)
-            V = torch.cat(Hs)
+            H = torch.cat(Hs)
 
-        big_copy.V = torch.concat((V, big.V), dim=1)
-        V = self.interaction_mp(big_copy, V_d)
+        big_copy.V = torch.concat((H, big.V), dim=1)
+        H = self.interaction_mp(big_copy, V_d)
 
         if self.interact_only_mixture:
-            Hs[mixture_idx] = V
+            Hs[mixture_idx] = H
         else:
             sizes = [
                 len(bmg.batch_mixture if isinstance(bmg, BatchMixtureMolGraph) else bmg)
                 for bmg in bmgs
             ]
-            Hs = list(torch.split(V, sizes))
+            Hs = list(torch.split(H, sizes))
 
         Hs = [
             self.mixture_agg(H, bmg.batch_mixture, bmg.w_fps)
