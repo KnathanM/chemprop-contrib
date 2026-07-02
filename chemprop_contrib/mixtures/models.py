@@ -144,7 +144,7 @@ class InteractionMPNN(MulticomponentMPNN):
             big_copy, V_d = self._reorder_big_V(big_copy, V_d)
             H = torch.cat(Hs)
 
-        big_copy.V = torch.concat((H, big.V), dim=1)
+        big_copy.V = torch.concat((H, big_copy.V), dim=1)
         H = self.interaction_mp(big_copy, V_d)
 
         if self.interact_only_mixture:

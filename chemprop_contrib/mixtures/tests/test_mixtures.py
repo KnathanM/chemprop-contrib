@@ -874,6 +874,31 @@ def test_interact_only_mixture_overfit():
     assert results[0]["test/mse"] < 0.01
 
 
+@pytest.mark.parametrize("which_m_agg,which_i_mp", MODEL_CONFIGURATIONS)
+def test_batch_size_invariance(which_m_agg, which_i_mp):
+    train_dp, val_dp, test_dp = make_datapoints()
+    train_ds, val_ds, test_ds = make_datasets(train_dp, val_dp, test_dp)
+
+    if which_i_mp is not None:
+        train_dset, val_dset, test_dset, transforms = make_interaction_datasets(
+            train_ds, val_ds, test_ds, train_dp, val_dp, test_dp
+        )
+        model = make_InteractionMPNN(train_dset, transforms, which_m_agg, which_i_mp)
+    else:
+        train_dset, val_dset, test_dset, transforms = make_mc_datasets(train_ds, val_ds, test_ds)
+        model = make_MixtureMPNN(train_dset, transforms, which_m_agg)
+
+    model.eval()
+    preds = {}
+    for bs in (1, 2, 3, 6):
+        loader = make_dataloader(test_dset, batch_size=bs)
+        with torch.inference_mode():
+            preds[bs] = torch.cat([model.predict_step(b, 0) for b in loader])
+    for bs in (1, 2, 3):
+        assert torch.allclose(preds[bs], preds[6], atol=1e-5), \
+            f"predictions depend on batch size at bs={bs}"
+
+
 def copy_bmg(bmg):
     if isinstance(bmg, list):
         return [copy.copy(_bmg) for _bmg in bmg]
