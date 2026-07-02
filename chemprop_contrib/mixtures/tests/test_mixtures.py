@@ -807,10 +807,7 @@ def test_charge_featurizer_interaction_overfit():
 
     test_dset = train_loader.dataset
     test_dset.reset()
-    if isinstance(test_dset, InteractionDataset):
-        test_dset._init_cache()
-    elif isinstance(test_dset, MulticomponentDataset):
-        [dset._init_cache() for dset in test_dset.datasets]
+    test_dset._init_cache()
     test_loader = make_dataloader(test_dset)
     results = trainer.test(model, test_loader)
     assert results[0]["test/mse"] < 0.01
@@ -865,10 +862,7 @@ def test_interact_only_mixture_overfit():
 
     test_dset = train_loader.dataset
     test_dset.reset()
-    if isinstance(test_dset, InteractionDataset):
-        test_dset._init_cache()
-    elif isinstance(test_dset, MulticomponentDataset):
-        [dset._init_cache() for dset in test_dset.datasets]
+    test_dset._init_cache()
     test_loader = make_dataloader(test_dset)
     results = trainer.test(model, test_loader)
     assert results[0]["test/mse"] < 0.01
