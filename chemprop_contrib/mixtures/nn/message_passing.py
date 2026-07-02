@@ -1,116 +1,62 @@
 import logging
-from typing import Iterable, Sequence
 
-import torch
-from chemprop.conf import DEFAULT_HIDDEN_DIM
-from chemprop.data.collate import BatchMolGraph
-from chemprop.nn.hparams import HasHParams
-from chemprop.nn.message_passing import AtomMessagePassing, BondMessagePassing, MessagePassing
-from chemprop.nn.utils import Activation, get_activation_function
 from lightning.pytorch.core.mixins import HyperparametersMixin
+import torch
 from torch import Tensor, nn
 
-from chemprop_contrib.mixtures.data import BatchComponentMolGraph, BatchMixtureGraph, BatchNodesOnly
+from chemprop.conf import DEFAULT_HIDDEN_DIM
+from chemprop.nn.hparams import HasHParams
+from chemprop.nn.message_passing import AtomMessagePassing, BondMessagePassing, MessagePassing
+from chemprop.nn.transforms import GraphTransform, ScaleTransform
+from chemprop.nn.utils import Activation, get_activation_function
+
+from chemprop_contrib.mixtures.data.collate import BatchInteractionGraph
 
 logger = logging.getLogger(__name__)
 
 
-class MixtureMulticomponentMessagePassing(nn.Module, HasHParams):
-    """A `MixtureMulticomponentMessagePassing` performs message-passing on each individual input in
-    a multicomponent input, while accounting for shared message-passing blocks for a group of
-    components in a mixture.
-
-    Parameters
-    ----------
-    blocks : Sequence[MessagePassing]
-        the invidual message-passing blocks for each group
-    shared : bool, default=False
-        whether one block will be shared among all groups
-    n_groups : int | None, default=None
-        number of groups, required if shared=True
-    """
-
-    def __init__(
-        self,
-        blocks: Sequence[MessagePassing],
-        shared: bool = False,
-        n_groups: int | None = None,
-    ):
-        super().__init__()
-        self.hparams = {
-            "cls": self.__class__,
-            "blocks": [block.hparams for block in blocks],
-            "shared": shared,
-            "n_groups": n_groups,
-        }
-
-        if len(blocks) == 0:
-            raise ValueError("arg 'blocks' was empty!")
-        if shared and len(blocks) > 1:
-            raise ValueError(
-                "More than 1 block was supplied but 'shared' was True!"
-            )
-        if shared and n_groups is None:
-            raise ValueError("n_groups is required when shared=True")
-
-        self.n_groups = n_groups
-        self.shared = shared
-        self.blocks = nn.ModuleList([blocks[0]] * self.n_groups if shared else blocks)
-
-    def __len__(self) -> int:
-        return len(self.blocks)
-
-    @property
-    def output_dims(self) -> list[int]:
-        return [block.output_dim for block in self.blocks]
-
-    def forward(
-        self,
-        bmgs: Iterable[Iterable[BatchMolGraph | BatchComponentMolGraph | BatchMixtureGraph | None]],
-        V_ds: Iterable[Iterable[Tensor]],
-    ) -> list[list[Tensor | None]]:
-        # If the final element in bmgs is a BatchMixtureGraph, then len(bmgs) = len(self.blocks) + 1
-        # and it is dropped by zip's truncation. The BatchMixtureGraph is used in agg.mixmp.
-        return [
-            [
-                block(bmg, V_d) if bmg is not None else None
-                for bmg, V_d in zip(group_bmgs, group_V_ds)
-            ]
-            for block, group_bmgs, group_V_ds in zip(self.blocks, bmgs, V_ds)
-        ]
-
-
 class MixtureMessagePassing(nn.Module, HyperparametersMixin, HasHParams):
-    r"""A :class:`MixtureMessagePassing` updates encodings of components in a mixture by passing
-    messages between them in a fully connected graph (no self connections).
+    r"""A :class:`MixtureMessagePassing` performs simple message passing between connected nodes. No
+    edge information is used.
 
     It implements the following operation:
 
     .. math::
 
         h_v^{(0)} &= \tau \left( \mathbf{W}_i\, x_v \right) \\
-        m_v^{(t)} &= \sum_{w \in \mathcal{V} \setminus \{v\}} h_w^{(t-1)} \\
+        m_v^{(t)} &= \sum_{w \in \mathcal{N}(v)} h_w^{(t-1)} \\
         h_v^{(t)} &= \tau\left( \mathbf{W}_i\, x_v + \mathbf{W}_h\, m_v^{(t)} \right)
 
     where :math:`\tau` is the activation function; :math:`\mathbf{W}_i` and :math:`\mathbf{W}_h`
-    are learned weight matrices; :math:`x_v` is the feature vector of component :math:`v`;
-    :math:`\mathcal{V}` denotes the set of components in the same mixture as :math:`v`
-    (the mixture graph is assumed fully connected); :math:`h_v^{(t)}` is the hidden
-    representation of component :math:`v` at iteration :math:`t`; :math:`m_v^{(t)}` is the
-    message received by component :math:`v` at iteration :math:`t`; and
-    :math:`t \in \{1, \dots, T\}` indexes the message-passing iterations.
+    are learned weight matrices; :math:`x_v` is the feature vector of node :math:`v`;
+    :math:`\mathcal{N}(v)` is the set of neighbors of :math:`v` as given by the graph's
+    ``edge_index``; :math:`h_v^{(t)}` is the hidden representation of node :math:`v` at iteration 
+    :math:`t`; :math:`m_v^{(t)}` is the message received by node :math:`v` at iteration :math:`t`;
+    and :math:`t \in \{1, \dots, T\}` indexes the message-passing iterations.
     """
 
     def __init__(
         self,
         d_v: int = DEFAULT_HIDDEN_DIM,
+        d_e: None = None,  # Only here for signature parity
         d_h: int = DEFAULT_HIDDEN_DIM,
         bias: bool = False,
         depth: int = 1,
         activation: str | Activation = Activation.RELU,
+        undirected: None = None,  # Only here for signature parity
+        d_vd: int | None = None,
+        V_d_transform: ScaleTransform | None = None,
+        graph_transform: GraphTransform | None = None,
     ):
         super().__init__()
-        self.save_hyperparameters()
+        ignore_list = ["V_d_transform", "graph_transform"]
+        if isinstance(activation, nn.Module):
+            ignore_list.append("activation")
+        self.save_hyperparameters(ignore=ignore_list)
+        self.hparams["V_d_transform"] = V_d_transform
+        self.hparams["graph_transform"] = graph_transform
+        if isinstance(activation, nn.Module):
+            self.hparams["activation"] = activation
         self.hparams["cls"] = self.__class__
 
         self.depth = depth
@@ -118,43 +64,51 @@ class MixtureMessagePassing(nn.Module, HyperparametersMixin, HasHParams):
 
         self.W_i = nn.Linear(d_v, d_h, bias)
         self.W_h = nn.Linear(d_h, d_h, bias)
+        self.W_d = nn.Linear(d_h + d_vd, d_h + d_vd) if d_vd else None
+
+        self.V_d_transform = V_d_transform if V_d_transform is not None else nn.Identity()
+        self.graph_transform = graph_transform if graph_transform is not None else nn.Identity()
 
     @property
     def output_dim(self) -> int:
-        return self.W_h.out_features
+        return self.W_d.out_features if self.W_d is not None else self.W_h.out_features
 
-    def initialize(self, bmg: BatchNodesOnly) -> Tensor:
-        return self.W_i(bmg.V)
+    def initialize(self, big) -> Tensor:
+        return self.W_i(big.V)
 
-    def message(self, H: Tensor, bmg: BatchNodesOnly):
-        batch_size = int(bmg.batch.max().item()) + 1
-        M = torch.zeros(batch_size, H.shape[1], dtype=H.dtype, device=H.device).scatter_reduce_(
-            0, bmg.batch.unsqueeze(1).expand_as(H), H, reduce="sum", include_self=False
-        )[bmg.batch]
-        return M - H  # exclude self
+    def message(self, H: Tensor, big) -> Tensor:
+        src, dst = big.edge_index[0], big.edge_index[1]
+        M = torch.zeros_like(H)
+        M.index_add_(0, dst, H[src])
+        return M
 
     def update(self, M_t: Tensor, H_0: Tensor):
         H_t = self.W_h(M_t)
         H_t = self.tau(H_0 + H_t)
         return H_t
 
-    def forward(self, bmg: BatchNodesOnly) -> Tensor:
-        H_0 = self.initialize(bmg)
+    def forward(self, big: BatchInteractionGraph, V_d: Tensor | None = None) -> Tensor:
+        big = self.graph_transform(big)
+        H_0 = self.initialize(big)
         H = self.tau(H_0)
         for _ in range(self.depth):
-            M = self.message(H, bmg)
+            M = self.message(H, big)
             H = self.update(M, H_0)
+
+        if V_d is not None:
+            V_d = self.V_d_transform(V_d)
+            H = self.W_d(torch.cat((H, V_d), dim=1))  # V x (d_o + d_vd)
+
         return H
 
 
 class InteractionMessagePassing(BondMessagePassing):
-    r"""Same as BondMessagePassing, except bonds are replaced with intermolecular interactions and
-    the args for `forward` are as follows:
+    r"""Same as BondMessagePassing except nodes are molecules, edges are interactions, and the args
+    for `forward` are as follows:
 
     Parameters
     ----------
-    bmg: BatchMixtureGraph
-        a batch of :class:`MixtureGraph`s to encode
+    big: BatchInteractionGraph
     V_d : Tensor | None, default=None
         an optional tensor of shape ``V x d_vd`` containing additional descriptors for each molecule
 
@@ -167,13 +121,12 @@ class InteractionMessagePassing(BondMessagePassing):
 
 
 class MolecularMessagePassing(AtomMessagePassing):
-    r"""Same as AtomMessagePassing, except atoms are replaced with molecules  and args for `forward`
-    are as follows:
+    r"""Same as AtomMessagePassing except nodes are molecules, edges are interactions, and the args
+    for `forward` are as follows:
 
     Parameters
     ----------
-    bmg: BatchMixtureGraph
-        a batch of :class:`MixtureGraph`s to encode
+    big: BatchInteractionGraph
     V_d : Tensor | None, default=None
         an optional tensor of shape ``V x d_vd`` containing additional descriptors for each molecule
 
@@ -183,3 +136,47 @@ class MolecularMessagePassing(AtomMessagePassing):
         a tensor of shape ``V x d_h`` or ``V x (d_h + d_vd)`` containing the encoding of each
         molecule in the batch, depending on whether additional molecular descriptors were provided
     """
+
+
+class NoMessagePassing(HyperparametersMixin, MessagePassing):
+    """The :class:`NoMessagePassing` only performs (optional) transforms on the vertex embeddings"""
+
+    def __init__(
+        self,
+        d_v: int = DEFAULT_HIDDEN_DIM,
+        d_e: None = None,
+        d_h: None = None,
+        bias: None = None,
+        depth: None = None,
+        dropout: None = None,
+        activation: None = None,
+        undirected: None = None,
+        d_vd: int | None = None,
+        V_d_transform: ScaleTransform | None = None,
+        graph_transform: GraphTransform | None = None,
+    ):
+        super().__init__()
+        self.save_hyperparameters(ignore=["V_d_transform", "graph_transform"])
+        self.hparams.update(
+            {
+                "cls": self.__class__,
+                "V_d_transform": V_d_transform,
+                "graph_transform": graph_transform,
+            }
+        )
+        self.d_v = d_v
+        self.d_vd = d_vd
+        self.V_d_transform = V_d_transform if V_d_transform is not None else nn.Identity()
+        self.graph_transform = graph_transform if graph_transform is not None else nn.Identity()
+
+    @property
+    def output_dim(self) -> int:
+        return self.d_v + self.d_vd if self.d_vd is not None else self.d_v
+
+    def forward(self, big: BatchInteractionGraph, V_d: Tensor | None = None) -> Tensor:
+        big = self.graph_transform(big)
+        H = big.V
+        if V_d is not None:
+            V_d = self.V_d_transform(V_d)
+            H = torch.cat((H, V_d), dim=1)
+        return H

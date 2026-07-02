@@ -9,19 +9,19 @@ from .agg import (
 from .message_passing import (
     InteractionMessagePassing,
     MixtureMessagePassing,
-    MixtureMulticomponentMessagePassing,
     MolecularMessagePassing,
+    NoMessagePassing,
 )
 
 __all__ = [
-    "MixtureAggregation",
-    "ConcatAggregation",
-    "WeightedSumAggregation",
-    "DeepsetsAggregation",
     "AttentiveAggregation",
-    "Set2SetAggregation",
+    "ConcatAggregation",
+    "DeepsetsAggregation",
+    "InteractionMessagePassing",
+    "MixtureAggregation",
     "MixtureMessagePassing",
     "MolecularMessagePassing",
-    "InteractionMessagePassing",
-    "MixtureMulticomponentMessagePassing",
+    "NoMessagePassing",
+    "Set2SetAggregation",
+    "WeightedSumAggregation",
 ]

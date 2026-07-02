@@ -1,41 +1,32 @@
 from .collate import (
-    BatchComponentDatum,
-    BatchComponentMolGraph,
-    BatchMixtureDatum,
-    BatchMixtureGraph,
-    BatchNodesOnly,
-    MixtureBatch,
-    collate_component,
-    collate_mixture,
-    collate_mixturegraph,
+    BatchInteractionGraph,
+    BatchMixtureMolGraph,
+    InteractionTrainingBatch,
+    MixtureMulticomponentTrainingBatch,
+    MixtureTrainingBatch,
+    collate_interaction_batch,
+    collate_mixture_batch,
+    collate_multicomponent_with_mixture,
 )
-from .datapoints import ComponentDatapoint, MixtureDatapoint
-from .datasets import (
-    ComponentDataset,
-    ComponentDatum,
-    MixtureDataset,
-    MixtureDatum,
-    MixtureGraphDataset,
-)
-from .molgraph import ComponentMolGraph, MixtureGraph
+from .datapoints import InteractionDatapoint, MixtureDatapoint
+from .datasets import InteractionDataset, InteractionDatum, MixtureDataset, MixtureDatum
+from .molgraph import InteractionGraph, MixtureMolGraph
 
 __all__ = [
-    "BatchComponentMolGraph",
-    "BatchComponentDatum",
-    "collate_component",
-    "MixtureBatch",
-    "BatchMixtureGraph",
-    "BatchMixtureDatum",
-    "BatchNodesOnly",
-    "collate_mixturegraph",
-    "collate_mixture",
-    "ComponentDatum",
-    "ComponentDataset",
-    "MixtureDataset",
-    "MixtureGraphDataset",
-    "ComponentDatapoint",
+    "BatchInteractionGraph",
+    "BatchMixtureMolGraph",
+    "InteractionDatapoint",
+    "InteractionDataset",
+    "InteractionDatum",
+    "InteractionGraph",
+    "InteractionTrainingBatch",
     "MixtureDatapoint",
-    "ComponentMolGraph",
-    "MixtureGraph",
+    "MixtureDataset",
     "MixtureDatum",
+    "MixtureMolGraph",
+    "MixtureMulticomponentTrainingBatch",
+    "MixtureTrainingBatch",
+    "collate_interaction_batch",
+    "collate_mixture_batch",
+    "collate_multicomponent_with_mixture",
 ]

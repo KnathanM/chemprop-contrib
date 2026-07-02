@@ -3,84 +3,46 @@ from typing import Iterable, NamedTuple, Sequence
 
 import numpy as np
 import torch
-from chemprop.data.collate import BatchMolGraph, collate_batch
-from chemprop.data.datasets import Datum
 from torch import Tensor
 
-from chemprop_contrib.mixtures.data.datasets import ComponentDatum, MixtureDatum
-from chemprop_contrib.mixtures.data.molgraph import ComponentMolGraph, MixtureGraph
+from chemprop.data.collate import BatchMolGraph, collate_batch
+from chemprop.data.datasets import Datum
+from chemprop_contrib.mixtures.data.datasets import InteractionDatum, MixtureDatum
+from chemprop_contrib.mixtures.data.molgraph import InteractionGraph, MixtureMolGraph
 
 
-# See also chemprop.data.collate.BatchMolGraph
-@dataclass(repr=False, eq=False, slots=True)
-class BatchComponentMolGraph:
-    """A :class:`BatchComponentMolGraph` represents a batch of :class:`ComponentMolGraph`\s. Each :class:`ComponentMolGraph`
-
-    It has all the attributes of a ``MolGraph`` with the addition of the ``batch`` attribute. This
-    class is intended for use with data loading, so it uses :obj:`~torch.Tensor`\s to store data
-    """
-
-    mgs: InitVar[Iterable[Iterable[ComponentMolGraph]]]
-    """A list of individual :class:`MolGraph`\s to be batched together"""
-    V: Tensor = field(init=False)
-    """the atom feature matrix"""
-    E: Tensor = field(init=False)
-    """the bond feature matrix"""
-    edge_index: Tensor = field(init=False)
-    """an tensor of shape ``2 x E`` containing the edges of the graph in COO format"""
-    rev_edge_index: Tensor = field(init=False)
-    """A tensor of shape ``E`` that maps from an edge index to the index of the source of the
-    reverse edge in the ``edge_index`` attribute."""
-    batch: Tensor = field(init=False)
-    """the index of the parent :class:`MolGraph` in the batched graph"""
-    G: Tensor = field(init=False)
+@dataclass(repr=False, eq=False)
+class BatchMixtureMolGraph(BatchMolGraph):
+    mgs: InitVar[Sequence[MixtureMolGraph]]
     w_fps: Tensor = field(init=False)
-    mixture_batch: Tensor = field(init=False)
+    """the predetermined weights of each molecule's learned fingerpint in the batch"""
+    batch_mixture: Tensor = field(init=False)
+    """the index of the parent mixture for each molecule in the batched mixture graph"""
 
-    def __post_init__(self, mgs):
-        self._BatchMolGraph__size = len(mgs)
+    def __post_init__(self, mgs: Sequence[MixtureMolGraph]):
+        super().__post_init__(mgs)
 
-        Vs = []
-        Es = []
-        edge_indexes = []
-        rev_edge_indexes = []
-        batch_indexes = []
-        Gs = []
-        w_fps = []
-
-        num_nodes = 0
-        num_edges = 0
+        w_fps, batch, batch_mixture = [], [], []
+        total_mols = 0
         for i, mg in enumerate(mgs):
-            if mg is None:
-                continue
-            Vs.append(mg.V)
-            Es.append(mg.E)
-            edge_indexes.append(mg.edge_index + num_nodes)
-            rev_edge_indexes.append(mg.rev_edge_index + num_edges)
-            batch_indexes.append([i] * len(mg.V))
-            Gs.append(mg.G)
-            w_fps.append(mg.w_fp)
+            n_mols = len(mg.molecule_sizes)
+            w_fps.append(mg.w_fps)
+            batch.append(np.repeat(np.arange(n_mols) + total_mols, mg.molecule_sizes))
+            batch_mixture.append(np.full(n_mols, i))
+            total_mols += n_mols
 
-            num_nodes += mg.V.shape[0]
-            num_edges += mg.edge_index.shape[1]
-
-        self.V = torch.from_numpy(np.concatenate(Vs)).float()
-        self.E = torch.from_numpy(np.concatenate(Es)).float()
-        self.edge_index = torch.from_numpy(np.hstack(edge_indexes)).long()
-        self.rev_edge_index = torch.from_numpy(np.concatenate(rev_edge_indexes)).long()
-        self.batch = torch.tensor(np.concatenate(batch_indexes)).long()
-        self.G = torch.from_numpy(np.vstack(Gs)).float()
-        self.w_fps = torch.from_numpy(np.array(w_fps)).float()
+        self.w_fps = torch.from_numpy(np.concatenate(w_fps)).float()
+        self.batch = torch.from_numpy(np.concatenate(batch)).long()
+        self.batch_mixture = torch.from_numpy(np.concatenate(batch_mixture)).long()
 
     def to(self, device: str | torch.device):
-        super(BatchComponentMolGraph, self).to(device)
-        self.G = self.G.to(device)
+        super().to(device)
         self.w_fps = self.w_fps.to(device)
+        self.batch_mixture = self.batch_mixture.to(device)
 
 
-# See also chemprop.data.collate.TrainingBatch
-class BatchComponentDatum(NamedTuple):
-    bmg: BatchComponentMolGraph
+class MixtureTrainingBatch(NamedTuple):
+    bmg: BatchMixtureMolGraph
     V_d: Tensor | None
     X_d: Tensor | None
     Y: Tensor | None
@@ -89,46 +51,11 @@ class BatchComponentDatum(NamedTuple):
     gt_mask: Tensor | None
 
 
-# See also chemprop.data.collate.collate_batch
-def collate_component(batch: Iterable[ComponentDatum]) -> BatchComponentDatum:
-    mgss, V_dss, x_ds, ys, weights, lt_masks, gt_masks = zip(*batch)
-
-    return BatchComponentDatum(
-        BatchComponentMolGraph(mgss),
-        None if V_dss[0] is None else torch.from_numpy(np.concatenate([V_d for V_ds in V_dss for V_d in V_ds], axis=0)).float(),
-        None if x_ds[0] is None else torch.from_numpy(np.array(x_ds)).float(),
-        None if ys[0] is None else torch.from_numpy(np.array(ys)).float(),
-        torch.tensor(weights, dtype=torch.float).unsqueeze(1),
-        None if lt_masks[0] is None else torch.from_numpy(np.array(lt_masks)),
-        None if gt_masks[0] is None else torch.from_numpy(np.array(gt_masks)),
-    )
-
-
-class BatchMixtureGraph(BatchMolGraph):
-    """A :class:`BatchMixtureGraph` represents a batch of individual :class:`MixtureGraph`\s.
-
-    It has all the attributes of a ``BatchMolGraph``.
-    """
-
-    mgs: InitVar[Sequence[MixtureGraph]]  # just updating the type hint
-
-
-# See also chemprop.data.collate.TrainingBatch
-class BatchMixtureDatum(NamedTuple):
-    bmg: BatchMixtureGraph
-    V_d: Tensor | None
-    X_d: Tensor | None
-    Y: Tensor | None
-    w: Tensor
-    lt_mask: Tensor | None
-    gt_mask: Tensor | None
-
-
-def collate_mixturegraph(batch: Iterable[MixtureDatum]) -> BatchMixtureDatum:
+def collate_mixture_batch(batch: Iterable[MixtureDatum]) -> MixtureTrainingBatch:
     mgs, V_ds, x_ds, ys, weights, lt_masks, gt_masks = zip(*batch)
 
-    return BatchMixtureDatum(
-        BatchMixtureGraph(mgs),
+    return MixtureTrainingBatch(
+        BatchMixtureMolGraph(mgs),
         None if V_ds[0] is None else torch.from_numpy(np.concatenate(V_ds)).float(),
         None if x_ds[0] is None else torch.from_numpy(np.array(x_ds)).float(),
         None if ys[0] is None else torch.from_numpy(np.array(ys)).float(),
@@ -138,10 +65,9 @@ def collate_mixturegraph(batch: Iterable[MixtureDatum]) -> BatchMixtureDatum:
     )
 
 
-# See also chemprop.data.collate.MulticomponentTrainingBatch
-class MixtureBatch(NamedTuple):
-    bmgs: list[BatchMolGraph | BatchComponentMolGraph | BatchMixtureGraph]
-    V_ds: list[Tensor | list[Tensor] | None]
+class MixtureMulticomponentTrainingBatch(NamedTuple):
+    bmgs: list[BatchMolGraph | BatchMixtureMolGraph]
+    V_ds: list[Tensor | None]
     X_d: Tensor | None
     Y: Tensor | None
     w: Tensor
@@ -149,20 +75,17 @@ class MixtureBatch(NamedTuple):
     gt_mask: Tensor | None
 
 
-# See also chemprop.data.collate.collate_multicomponent
-def collate_mixture(
-    batches: Iterable[Iterable[Datum | ComponentDatum | MixtureDatum]],
-) -> MixtureBatch:
+def collate_multicomponent_with_mixture(
+    batches: Iterable[Iterable[Datum | MixtureDatum]],
+) -> MixtureMulticomponentTrainingBatch:
     tbs = []
     for batch in zip(*batches):
         if isinstance(batch[0], Datum):
             tbs.append(collate_batch(batch))
-        elif isinstance(batch[0], ComponentDatum):
-            tbs.append(collate_component(batch))
         elif isinstance(batch[0], MixtureDatum):
-            tbs.append(collate_mixturegraph(batch))
+            tbs.append(collate_mixture_batch(batch))
 
-    return MixtureBatch(
+    return MixtureMulticomponentTrainingBatch(
         [tb.bmg for tb in tbs],
         [tb.V_d for tb in tbs],
         tbs[0].X_d,
@@ -173,12 +96,60 @@ def collate_mixture(
     )
 
 
-class BatchNodesOnly(NamedTuple):
-    """A reduced version of :class:`BatchMolGraph` that only has nodes and a
-    mapping from nodes to subgraphs.
-    """
+@dataclass(repr=False, eq=False)
+class BatchInteractionGraph(BatchMolGraph):
+    mgs: InitVar[Sequence[InteractionGraph]]
+    sub_bmgs: list[BatchMolGraph | BatchMixtureMolGraph] = field(init=False)
+    """the batched subgraphs that get aggregated into the InteractionGraph node embeddings"""
+    sub_bmgs_V_ds: list[Tensor | None] = field(init=False)
+    """the optional batched V_ds for each subgraph"""
 
-    V: Tensor
-    """the node feature matrix"""
-    batch: Tensor
-    """the index of the parent graph in the batched graph"""
+    def __post_init__(self, mgs: Sequence[InteractionGraph]):
+        super().__post_init__(mgs)
+
+        self.sub_bmgs = []
+        for subs in zip(*(ig.sub_mgs for ig in mgs)):
+            if isinstance(subs[0], MixtureMolGraph):
+                self.sub_bmgs.append(BatchMixtureMolGraph(subs))
+            else:
+                self.sub_bmgs.append(BatchMolGraph(subs))
+
+        self.sub_bmgs_V_ds = []
+        for V_ds in zip(*(ig.sub_mgs_V_ds for ig in mgs)):
+            self.sub_bmgs_V_ds.append(
+                None if V_ds[0] is None else torch.from_numpy(np.concatenate(V_ds)).float()
+            )
+
+    def to(self, device: str | torch.device):
+        super().to(device)
+        for sub_bmg in self.sub_bmgs:
+            sub_bmg.to(device)
+        self.sub_bmgs_V_ds = [
+            V_ds.to(device) if V_ds is not None else None for V_ds in self.sub_bmgs_V_ds
+        ]
+
+
+class InteractionTrainingBatch(NamedTuple):
+    big: BatchInteractionGraph
+    V_d: Tensor | None
+    X_d: Tensor | None
+    Y: Tensor | None
+    w: Tensor
+    lt_mask: Tensor | None
+    gt_mask: Tensor | None
+
+
+def collate_interaction_batch(
+    batch: Iterable[InteractionDatum],
+) -> InteractionTrainingBatch:
+    igs, V_ds, x_ds, ys, weights, lt_masks, gt_masks = zip(*batch)
+
+    return InteractionTrainingBatch(
+        BatchInteractionGraph(igs),
+        None if V_ds[0] is None else torch.from_numpy(np.concatenate(V_ds)).float(),
+        None if x_ds[0] is None else torch.from_numpy(np.array(x_ds)).float(),
+        None if ys[0] is None else torch.from_numpy(np.array(ys)).float(),
+        torch.tensor(weights, dtype=torch.float).unsqueeze(1),
+        None if lt_masks[0] is None else torch.from_numpy(np.array(lt_masks)),
+        None if gt_masks[0] is None else torch.from_numpy(np.array(gt_masks)),
+    )
