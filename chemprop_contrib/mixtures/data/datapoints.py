@@ -11,6 +11,23 @@ from chemprop.utils import make_mol
 
 
 @dataclass
+class _V_f_E_f_V_d:
+    V_f: np.ndarray | None = None
+    E_f: np.ndarray | None = None
+    V_d: np.ndarray | None = None
+
+    def __post_init__(self):
+        nan_token = 0
+        if self.V_f is not None:
+            self.V_f[np.isnan(self.V_f)] = nan_token
+        if self.E_f is not None:
+            self.E_f[np.isnan(self.E_f)] = nan_token
+        if self.V_d is not None:
+            self.V_d[np.isnan(self.V_d)] = nan_token
+        super().__post_init__()
+
+
+@dataclass
 class _MixtureDatapointMixin:
     mols: list[Chem.Mol]
     """the molecules associated with this mixture"""
@@ -34,7 +51,7 @@ class _MixtureDatapointMixin:
 
 
 @dataclass
-class MixtureDatapoint(_DatapointMixin, _MixtureDatapointMixin):
+class MixtureDatapoint(_V_f_E_f_V_d, _DatapointMixin, _MixtureDatapointMixin):
     """A :class:`MixtureDatapoint` represents a mixture of molecules, i.e. where the order of input
     molecules does not matter and the input can have any number of molecules."""
 
@@ -69,14 +86,6 @@ class MixtureDatapoint(_DatapointMixin, _MixtureDatapointMixin):
         elif len(self.w_fps) != len(self.mols):
             raise ValueError(f"w_fps has length {len(self.w_fps)}, expected {len(self.mols)}")
 
-        NAN_TOKEN = 0
-        if self.V_f is not None:
-            self.V_f[np.isnan(self.V_f)] = NAN_TOKEN
-        if self.E_f is not None:
-            self.E_f[np.isnan(self.E_f)] = NAN_TOKEN
-        if self.V_d is not None:
-            self.V_d[np.isnan(self.V_d)] = NAN_TOKEN
-
         super().__post_init__()
 
     def __len__(self) -> int:
@@ -84,7 +93,7 @@ class MixtureDatapoint(_DatapointMixin, _MixtureDatapointMixin):
 
 
 @dataclass
-class InteractionDatapoint(_DatapointMixin):
+class InteractionDatapoint(_V_f_E_f_V_d, _DatapointMixin):
     """An :class:`InteractionDatapoint` stores extra molecule (node) and interaction (edge)
     features/descriptors for an interaction graph between molecules in a datapoint. While it also
     holds training target information, it is not intended to be used alone. When combined with
@@ -108,17 +117,6 @@ class InteractionDatapoint(_DatapointMixin):
     """A numpy array of shape ``V x d_vd``, where ``V`` is the number of molecules in the mixture,
     and ``d_vd`` is the number of additional descriptors that will be concatenated to molecule-level
     descriptors *after* interaction message passing"""
-
-    def __post_init__(self):
-        NAN_TOKEN = 0
-        if self.V_f is not None:
-            self.V_f[np.isnan(self.V_f)] = NAN_TOKEN
-        if self.E_f is not None:
-            self.E_f[np.isnan(self.E_f)] = NAN_TOKEN
-        if self.V_d is not None:
-            self.V_d[np.isnan(self.V_d)] = NAN_TOKEN
-
-        super().__post_init__()
 
     def __len__(self) -> int:
         return 1

@@ -37,7 +37,7 @@ class MixtureDataset(MoleculeDataset):
     def __getitem__(self, idx: int) -> MixtureMolGraph:
         d = self.data[idx]
         mg = self.mg_cache[idx]
-        molecule_sizes = np.fromstring(d.mol.GetProp("molecule_sizes"), sep=",", dtype=int)
+        molecule_sizes = self.get_molecule_sizes(idx)
         mg = MixtureMolGraph.from_molgraph(mg, molecule_sizes, d.w_fps)
         return MixtureDatum(
             mg,
@@ -48,6 +48,10 @@ class MixtureDataset(MoleculeDataset):
             d.lt_mask,
             d.gt_mask,
         )
+
+    def get_molecule_sizes(self, idx: int) -> np.ndarray:
+        d = self.data[idx]
+        return np.fromstring(d.mol.GetProp("molecule_sizes"), sep=",", dtype=int)
 
     @property
     def molss(self) -> list[list[Chem.Mol]]:
@@ -66,20 +70,13 @@ class InteractionDatum(NamedTuple):
 
 
 @dataclass(repr=False, eq=False)
-class _GraphOfGraphs:
-    """a separate class is needed to have subgraph_datasets appear in the argument
-    order before other arguments in MoleculeDataset that have defaults"""
-
-    subgraph_datasets: list[MoleculeDataset | MixtureDataset]
-
-
-@dataclass(repr=False, eq=False)
-class InteractionDataset(MoleculeDataset, _GraphOfGraphs, Dataset[InteractionDatum]):
+class InteractionDataset(MoleculeDataset, Dataset[InteractionDatum]):
     data: list[InteractionDatapoint]
     featurizer: Featurizer[list[Chem.Mol | list[Chem.Mol]], MolGraph] = field(
         default_factory=CompleteInteractionGraphFeaturizer.with_self_loops_and_hbonds
     )
     n_workers: int = 0
+    subgraph_datasets: list[MoleculeDataset | MixtureDataset] | None = None
 
     def __post_init__(self):
         if self.subgraph_datasets is None:
@@ -97,12 +94,11 @@ class InteractionDataset(MoleculeDataset, _GraphOfGraphs, Dataset[InteractionDat
         sub_mgs = []
         for dset in self.subgraph_datasets:
             if isinstance(dset, MixtureDataset):
-                sub_d = dset.data[idx]
-                molecule_sizes = np.fromstring(
-                    sub_d.mol.GetProp("molecule_sizes"), sep=",", dtype=int
-                )
+                molecule_sizes = dset.get_molecule_sizes(idx)
                 sub_mgs.append(
-                    MixtureMolGraph.from_molgraph(dset.mg_cache[idx], molecule_sizes, sub_d.w_fps)
+                    MixtureMolGraph.from_molgraph(
+                        dset.mg_cache[idx], molecule_sizes, dset.data[idx].w_fps
+                    )
                 )
             else:
                 sub_mgs.append(dset.mg_cache[idx])

@@ -35,6 +35,13 @@ from chemprop_contrib.mixtures.featurizers import (
     EmptyVectorFeaturizer,
     HydrogenBondFeaturizer,
 )
+from chemprop_contrib.mixtures.id import (
+    IDMixtureDatapoint,
+    IDMixtureDataset,
+    IDMoleculeDatapoint,
+    IDMoleculeDataset,
+    MolGraphStore,
+)
 from chemprop_contrib.mixtures.models import InteractionMPNN, MixtureMPNN
 from chemprop_contrib.mixtures.nn import (
     AttentiveAggregation,
@@ -950,7 +957,7 @@ def test_interaction_dataset_smiles():
     train_dp, val_dp, test_dp = make_datapoints()
     train_ds, val_ds, test_ds = make_datasets(train_dp, val_dp, test_dp)
 
-    ds = InteractionDataset(train_ds, data=train_dp[2])
+    ds = InteractionDataset(train_dp[2], subgraph_datasets=train_ds)
 
     expected: list[tuple[str, ...]] = [
         ("C=CC(C)=CCC=C(C)C", "CC(=O)O.c1ccccc1"),
@@ -961,3 +968,185 @@ def test_interaction_dataset_smiles():
         ("CCO[Si](Cl)(OCC)OCC", "CC(=O)O.ClC(Cl)Cl"),
     ]
     assert ds.smiles == expected
+
+
+def inchi_to_smiles(inchi):
+    return Chem.MolToSmiles(Chem.MolFromInchi(inchi))
+
+
+def test_id_datasets_coverage():
+    df = pd.read_csv(DATA_CSV).head(10)
+    all_inchis = set()
+    for col in ["inchi_solute", "inchi_solvent1", "inchi_solvent2"]:
+        all_inchis.update(df[col].dropna())
+    inchi_to_smiles_map = {}
+    for inchi in all_inchis:
+        inchi_to_smiles_map[inchi] = inchi_to_smiles(inchi)
+    unique_smiles = sorted(set(inchi_to_smiles_map.values()))
+    mg_store = MolGraphStore(smiles_strings=unique_smiles)
+
+    smiles_to_id = mg_store.smiles_to_id
+    dp_solutes = [
+        IDMoleculeDatapoint(mol_id=smiles_to_id[inchi_to_smiles_map[inchi]])
+        for inchi in df["inchi_solute"]
+    ]
+    dp_solvents = []
+    for inchi1, inchi2, frac in zip(
+        df["inchi_solvent1"], df["inchi_solvent2"], df["frac_solvent1"]
+    ):
+        if frac == 0:
+            smiles_list = [inchi_to_smiles_map[inchi2]]
+            w_fps = [1.0]
+        elif frac == 1:
+            smiles_list = [inchi_to_smiles_map[inchi1]]
+            w_fps = [1.0]
+        else:
+            smiles_list = [inchi_to_smiles_map[inchi1], inchi_to_smiles_map[inchi2]]
+            w_fps = [frac, 1 - frac]
+
+        mol_ids = [smiles_to_id[s] for s in smiles_list]
+        dp_solvents.append(IDMixtureDatapoint(mol_ids=mol_ids, w_fps=w_fps))
+
+    with pytest.raises(ValueError, match="requires argument `mg_store`"):
+        IDMoleculeDataset(dp_solutes)
+
+    with pytest.raises(ValueError, match="requires argument `mg_store`"):
+        IDMoleculeDataset(dp_solutes, mg_store=None)
+
+    with pytest.raises(ValueError, match="requires argument `mg_store`"):
+        IDMixtureDataset(dp_solvents)
+
+    with pytest.raises(ValueError, match="requires argument `mg_store`"):
+        IDMixtureDataset(dp_solvents, mg_store=None)
+
+    dset = IDMoleculeDataset(dp_solutes, mg_store=mg_store)
+    expected = [
+        "C=CC(C)=CCC=C(C)C",
+        "CC1(C)CCCC2(C)C1CCCC21CCCO1",
+        "ClC(Cl)(Cl)Br",
+        "CC(C(C)C(F)(F)F)C(F)(F)F",
+        "FCC(OC(F)(F)F)C(F)(F)F",
+        "CCO[Si](Cl)(OCC)OCC",
+        "CCCCC(C)CC",
+        "Brc1c(Br)c(Br)c2c(c1Br)-c1nc-2nc2[nH]c(nc3nc(nc4[nH]c(n1)c1c(Br)c(Br)c(Br)c(Br)c41)-c1c(Br)c(Br)c(Br)c(Br)c1-3)c1c(Br)c(Br)c(Br)c(Br)c21",
+        "CC(C)=C1CCC(C)C2=C(C1)C(C)CC2",
+        "O=[N+]([O-])c1cccc(O)c1",
+    ]
+    assert dset.smiles == expected
+
+    dset = IDMixtureDataset(dp_solvents, mg_store=mg_store)
+    expected = [
+        "CC(=O)O.c1ccccc1",
+        "CC(C)=O",
+        "CC(C)O",
+        "CC(C)=O.CCC(C)=O",
+        "CC(=O)O.CC(C)CC(C)(C)C",
+        "CC(=O)O.ClC(Cl)Cl",
+        "C1CCOC1.CCCCC",
+        "C1CCOC1.ClCCl",
+        "CC(=O)O.CCC(C)=O",
+        "CC(C)=O.Cc1ccccc1",
+    ]
+    assert dset.smiles == expected
+
+    mols = dset.mols
+    assert isinstance(mols, list)
+    assert len(mols) == len(dp_solvents)
+    for idx, mol in enumerate(mols):
+        assert isinstance(mol, Chem.Mol)
+        assert mol.HasProp("molecule_sizes")
+
+        expected_sizes = dset.get_molecule_sizes(idx)
+        prop_sizes = np.array([int(x) for x in mol.GetProp("molecule_sizes").split(",")])
+        np.testing.assert_array_equal(prop_sizes, expected_sizes)
+        assert mol.GetNumAtoms() == int(expected_sizes.sum())
+
+
+def test_id_datasets_overfit(tmp_path):
+    df = pd.read_csv(DATA_CSV)
+    ys = df[["Gsolv (kcal/mol)"]].to_numpy(dtype=float)
+
+    all_inchis = set()
+    for col in ["inchi_solute", "inchi_solvent1", "inchi_solvent2"]:
+        all_inchis.update(df[col].dropna())
+    inchi_to_smiles_map = {}
+    for inchi in all_inchis:
+        inchi_to_smiles_map[inchi] = inchi_to_smiles(inchi)
+    unique_smiles = sorted(set(inchi_to_smiles_map.values()))
+
+    mg_store = MolGraphStore(smiles_strings=unique_smiles)
+    mg_store.save(tmp_path / "mg_store.pkl")
+    mg_store = MolGraphStore.load(tmp_path / "mg_store.pkl")
+
+    smiles_to_id = mg_store.smiles_to_id
+    dp_solutes = [
+        IDMoleculeDatapoint(mol_id=smiles_to_id[inchi_to_smiles_map[inchi]])
+        for inchi in df["inchi_solute"]
+    ]
+    dp_solvents = []
+    for inchi1, inchi2, frac in zip(
+        df["inchi_solvent1"], df["inchi_solvent2"], df["frac_solvent1"]
+    ):
+        if frac == 0:
+            smiles_list = [inchi_to_smiles_map[inchi2]]
+            w_fps = [1.0]
+        elif frac == 1:
+            smiles_list = [inchi_to_smiles_map[inchi1]]
+            w_fps = [1.0]
+        else:
+            smiles_list = [inchi_to_smiles_map[inchi1], inchi_to_smiles_map[inchi2]]
+            w_fps = [frac, 1 - frac]
+
+        mol_ids = [smiles_to_id[s] for s in smiles_list]
+        V_f = np.random.rand(
+            sum(mg_store.id_to_atom_count[id] for id in mol_ids), N_EXTRA_ATOM_FEATURES
+        )
+        E_f = np.random.rand(
+            sum(mg_store.id_to_bond_count[id] for id in mol_ids), N_EXTRA_BOND_FEATURES
+        )
+        dp_solvents.append(IDMixtureDatapoint(mol_ids=mol_ids, V_f=V_f, E_f=E_f, w_fps=w_fps))
+
+    ds = [
+        IDMoleculeDataset(dp_solutes, mg_store=mg_store),
+        IDMixtureDataset(dp_solvents, mg_store=mg_store),
+    ]
+
+    dp_inter = [InteractionDatapoint(y=y) for y in ys]
+
+    ids = InteractionDataset(subgraph_datasets=ds, data=dp_inter)
+    scaler = ids.normalize_targets()
+    output_transform = UnscaleTransform.from_standard_scaler(scaler)
+    loader = make_dataloader(ids)
+
+    featurizer = SimpleMoleculeMolGraphFeaturizer()
+    solvent_mp = BondMessagePassing(
+        d_v=featurizer.atom_fdim + N_EXTRA_ATOM_FEATURES,
+        d_e=featurizer.bond_fdim + N_EXTRA_BOND_FEATURES,
+    )
+    solute_mp = BondMessagePassing(d_h=solvent_mp.output_dim)
+    mcmp = MulticomponentMessagePassing(blocks=[solute_mp, solvent_mp], n_components=2)
+
+    interaction_mp = InteractionMessagePassing(
+        d_v=ids.featurizer.mol_fdim + 300,
+        d_e=ids.featurizer.interaction_fdim,
+    )
+    mixture_agg = WeightedSumAggregation(interaction_mp.output_dim)
+    ffn = RegressionFFN(
+        input_dim=(interaction_mp.output_dim + mixture_agg.output_dim),
+        n_tasks=ids.Y.shape[1],
+        output_transform=output_transform,
+    )
+    model = InteractionMPNN(mcmp, MeanAggregation(), interaction_mp, mixture_agg, ffn)
+
+    trainer = make_trainer(max_epochs=100)  # More epochs because more data to overfit
+    trainer.fit(model, loader)
+
+    train_loss = float(trainer.callback_metrics["train_loss_epoch"])
+    assert train_loss < 0.005
+
+    test_dset = loader.dataset
+    test_dset.reset()
+    test_dset._init_cache()
+    test_loader = make_dataloader(test_dset)
+    results = trainer.test(model, test_loader)
+    assert results[0]["test/mse"] < 0.01

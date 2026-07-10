@@ -21,6 +21,17 @@ from .featurizers import (
     EmptyVectorFeaturizer,
     HydrogenBondFeaturizer,
 )
+from .id import (
+    IDMixtureDatapoint,
+    IDMixtureDataset,
+    IDMixtureMolGraphCache,
+    IDMoleculeDatapoint,
+    IDMoleculeDataset,
+    IDMolGraphCache,
+    MolGraphStore,
+    dict_to_molgraph,
+    molgraph_to_dict,
+)
 from .models import InteractionMPNN, MixtureMPNN
 from .nn import (
     AttentiveAggregation,
@@ -65,4 +76,13 @@ __all__ = [
     "NoMessagePassing",
     "Set2SetAggregation",
     "WeightedSumAggregation",
+    "IDMixtureDatapoint",
+    "IDMixtureDataset",
+    "IDMixtureMolGraphCache",
+    "IDMoleculeDatapoint",
+    "IDMoleculeDataset",
+    "IDMolGraphCache",
+    "MolGraphStore",
+    "dict_to_molgraph",
+    "molgraph_to_dict",
 ]
