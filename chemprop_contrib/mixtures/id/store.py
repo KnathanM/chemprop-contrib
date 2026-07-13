@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, InitVar, field
+from dataclasses import dataclass, InitVar, field, fields, is_dataclass
 from datetime import datetime, timezone
+import inspect
 from pathlib import Path
 import pickle
 import platform
@@ -13,6 +14,7 @@ from rdkit import Chem, rdBase
 
 import chemprop
 from chemprop.data.molgraph import MolGraph
+from chemprop.featurizers.base import Featurizer
 from chemprop.featurizers.molgraph import SimpleMoleculeMolGraphFeaturizer
 
 
@@ -25,7 +27,7 @@ MolGraphDict: TypeAlias = dict[MoleculeIndex, MolGraph]
 AtomCountDict: TypeAlias = dict[MoleculeIndex, int]
 BondCountDict: TypeAlias = dict[MoleculeIndex, int]
 MakeMolFunc: TypeAlias = Callable[[SMILES], Chem.Mol]
-MakeMolGraphFunc: TypeAlias = Callable[[Chem.Mol], MolGraph]
+MoleculeFeaturizer: TypeAlias = Featurizer[Chem.Mol, MolGraph]
 
 
 def molgraph_to_dict(mg: MolGraph) -> dict[str, np.ndarray]:
@@ -39,6 +41,51 @@ def molgraph_to_dict(mg: MolGraph) -> dict[str, np.ndarray]:
 
 def dict_to_molgraph(d: dict[str, np.ndarray]) -> MolGraph:
     return MolGraph(d["V"], d["E"], d["edge_index"], d["rev_edge_index"])
+
+
+def describe_callable(obj: Any, _depth: int = 0, _max_depth: int = 5) -> dict[str, Any]:
+    """Describe a callable in plain text for archival purposes."""
+    info = {}
+
+    if inspect.isfunction(obj) or inspect.ismethod(obj) or inspect.isbuiltin(obj):
+        info["kind"] = "function"
+        info["module"] = getattr(obj, "__module__", None)
+        info["qualname"] = getattr(obj, "__qualname__", None)
+        return info
+
+    if callable(obj):
+        cls = obj if inspect.isclass(obj) else type(obj)
+        info["kind"] = "class" if inspect.isclass(obj) else "instance"
+        info["module"] = getattr(cls, "__module__", None)
+        info["qualname"] = getattr(cls, "__qualname__", None)
+        info["repr"] = repr(obj)
+
+        if not inspect.isclass(obj):
+            state = {}
+            if is_dataclass(obj):
+                state = {f.name: getattr(obj, f.name, None) for f in fields(obj)}
+            elif hasattr(obj, "__dict__"):
+                state = dict(vars(obj))
+            elif hasattr(type(obj), "__slots__"):
+                slots = getattr(type(obj), "__slots__")
+                names = [slots] if isinstance(slots, str) else slots
+                state = {name: getattr(obj, name) for name in names if hasattr(obj, name)}
+
+            if state:
+                info["state"] = {
+                    name: (
+                        describe_callable(value, _depth + 1, _max_depth)
+                        if callable(value) and _depth < _max_depth
+                        else repr(value)
+                    )
+                    for name, value in state.items()
+                    if not name.startswith("_")
+                }
+        return info
+
+    info["kind"] = "unknown"
+    info["repr"] = repr(obj)
+    return info
 
 
 @dataclass
@@ -57,7 +104,7 @@ class MolGraphStore:
     make_mol_func : MakeMolFunc | None, default=None
         an optional callable that converts SMILES strings to ``Chem.Mol``. If ``None``, chemprop's
         ``make_mol`` is used.
-    make_molgraph_func : MakeMolGraphFunc | None, default=None
+    featurizer : MoleculeFeaturizer | None, default=None
         an optional callable that converts ``Chem.Mol`` to ``MolGraph``. If ``None``, chemprop's
         ``SimpleMoleculeMolGraphFeaturizer`` is used.
     id_to_smiles : SMILESDict
@@ -77,8 +124,8 @@ class MolGraphStore:
     """
 
     smiles_strings: InitVar[Iterable[str] | None] = None
-    make_mol_func: MakeMolFunc | None = None
-    make_molgraph_func: MakeMolGraphFunc | None = None
+    make_mol_func: InitVar[MakeMolFunc | None] = None
+    featurizer: InitVar[MoleculeFeaturizer | None] = None
 
     id_to_smiles: SMILESDict = field(default_factory=dict)
     smiles_to_id: IndexDict = field(default_factory=dict)
@@ -91,32 +138,33 @@ class MolGraphStore:
     def __post_init__(
         self,
         smiles_strings: Iterable[str] | None,
+        make_mol_func: MakeMolFunc | None,
+        featurizer: MoleculeFeaturizer | None,
     ) -> None:
         if smiles_strings is None:  # Skip creation when self.load is called
             return
+
+        make_mol_func = make_mol_func if make_mol_func is not None else chemprop.utils.make_mol
+        featurizer = featurizer if featurizer is not None else SimpleMoleculeMolGraphFeaturizer()
 
         unique = list(dict.fromkeys(smiles_strings))
 
         self.id_to_smiles = dict(enumerate(unique))
         self.smiles_to_id = {ident: idx for idx, ident in enumerate(unique)}
 
-        self.make_mol_func = self.make_mol_func or chemprop.utils.make_mol
-        self.id_to_mol = {
-            idx: self.make_mol_func(smiles) for idx, smiles in self.id_to_smiles.items()
-        }
+        self.id_to_mol = {idx: make_mol_func(smiles) for idx, smiles in self.id_to_smiles.items()}
         self.id_to_atom_count = {idx: mol.GetNumAtoms() for idx, mol in self.id_to_mol.items()}
         self.id_to_bond_count = {idx: mol.GetNumBonds() for idx, mol in self.id_to_mol.items()}
 
-        self.make_molgraph_func = self.make_molgraph_func or SimpleMoleculeMolGraphFeaturizer()
-        self.id_to_graph = {
-            idx: self.make_molgraph_func(mol) for idx, mol in self.id_to_mol.items()
-        }
+        self.id_to_graph = {idx: featurizer(mol) for idx, mol in self.id_to_mol.items()}
 
         self.metadata = {
             "created_utc": datetime.now(timezone.utc).isoformat(),
             "python_version": platform.python_version(),
             "chemprop_version": chemprop.__version__,
             "rdkit_version": rdBase.rdkitVersion,
+            "make_mol_func": describe_callable(make_mol_func),
+            "featurizer": describe_callable(featurizer),
         }
 
     def __getitem__(self, mol_id: int) -> MolGraph:
@@ -126,8 +174,7 @@ class MolGraphStore:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
 
-        payload = {
-            "metadata": self.metadata,
+        data = {
             "id_to_smiles": self.id_to_smiles,
             "smiles_to_id": self.smiles_to_id,
             "id_to_mol": self.id_to_mol,
@@ -137,21 +184,26 @@ class MolGraphStore:
         }
 
         with path.open("wb") as f:
-            pickle.dump(payload, f)
+            pickle.dump(self.metadata, f)
+            pickle.dump(data, f)
 
     @classmethod
     def load(cls, path: str | Path) -> MolGraphStore:
         with Path(path).open("rb") as f:
-            payload = pickle.load(f)
+            metadata = pickle.load(f)
+            try:
+                data = pickle.load(f)
+            except (ImportError, ModuleNotFoundError) as e:
+                raise type(e)(f"Can't load data: {e}. But here's the metadata: {metadata}") from e
 
         return cls(
-            id_to_smiles=payload["id_to_smiles"],
-            smiles_to_id=payload["smiles_to_id"],
-            id_to_mol=payload["id_to_mol"],
-            id_to_atom_count=payload["id_to_atom_count"],
-            id_to_bond_count=payload["id_to_bond_count"],
-            id_to_graph={k: dict_to_molgraph(v) for k, v in payload["id_to_graph"].items()},
-            metadata=payload["metadata"],
+            id_to_smiles=data["id_to_smiles"],
+            smiles_to_id=data["smiles_to_id"],
+            id_to_mol=data["id_to_mol"],
+            id_to_atom_count=data["id_to_atom_count"],
+            id_to_bond_count=data["id_to_bond_count"],
+            id_to_graph={k: dict_to_molgraph(v) for k, v in data["id_to_graph"].items()},
+            metadata=metadata,
         )
 
 

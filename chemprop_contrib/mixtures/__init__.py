@@ -29,6 +29,7 @@ from .id import (
     IDMoleculeDataset,
     IDMolGraphCache,
     MolGraphStore,
+    describe_callable,
     dict_to_molgraph,
     molgraph_to_dict,
 )
@@ -83,6 +84,7 @@ __all__ = [
     "IDMoleculeDataset",
     "IDMolGraphCache",
     "MolGraphStore",
+    "describe_callable",
     "dict_to_molgraph",
     "molgraph_to_dict",
 ]
