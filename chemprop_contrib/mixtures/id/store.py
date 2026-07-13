@@ -77,8 +77,8 @@ class MolGraphStore:
     """
 
     smiles_strings: InitVar[Iterable[str] | None] = None
-    make_mol_func: InitVar[MakeMolFunc | None] = None
-    make_molgraph_func: InitVar[MakeMolGraphFunc | None] = None
+    make_mol_func: MakeMolFunc | None = None
+    make_molgraph_func: MakeMolGraphFunc | None = None
 
     id_to_smiles: SMILESDict = field(default_factory=dict)
     smiles_to_id: IndexDict = field(default_factory=dict)
@@ -91,8 +91,6 @@ class MolGraphStore:
     def __post_init__(
         self,
         smiles_strings: Iterable[str] | None,
-        make_mol_func: Callable[[SMILESDict], MolDict] | None,
-        make_molgraph_func: Callable[[MolDict], MolGraphDict] | None,
     ) -> None:
         if smiles_strings is None:  # Skip creation when self.load is called
             return
@@ -102,13 +100,17 @@ class MolGraphStore:
         self.id_to_smiles = dict(enumerate(unique))
         self.smiles_to_id = {ident: idx for idx, ident in enumerate(unique)}
 
-        make_mol_func = make_mol_func or chemprop.utils.make_mol
-        self.id_to_mol = {idx: make_mol_func(smiles) for idx, smiles in self.id_to_smiles.items()}
+        self.make_mol_func = self.make_mol_func or chemprop.utils.make_mol
+        self.id_to_mol = {
+            idx: self.make_mol_func(smiles) for idx, smiles in self.id_to_smiles.items()
+        }
         self.id_to_atom_count = {idx: mol.GetNumAtoms() for idx, mol in self.id_to_mol.items()}
         self.id_to_bond_count = {idx: mol.GetNumBonds() for idx, mol in self.id_to_mol.items()}
 
-        make_molgraph_func = make_molgraph_func or SimpleMoleculeMolGraphFeaturizer()
-        self.id_to_graph = {idx: make_molgraph_func(mol) for idx, mol in self.id_to_mol.items()}
+        self.make_molgraph_func = self.make_molgraph_func or SimpleMoleculeMolGraphFeaturizer()
+        self.id_to_graph = {
+            idx: self.make_molgraph_func(mol) for idx, mol in self.id_to_mol.items()
+        }
 
         self.metadata = {
             "created_utc": datetime.now(timezone.utc).isoformat(),
