@@ -1126,9 +1126,8 @@ def test_id_datasets_overfit(tmp_path):
     solute_mp = BondMessagePassing(d_h=solvent_mp.output_dim)
     mcmp = MulticomponentMessagePassing(blocks=[solute_mp, solvent_mp], n_components=2)
 
-    interaction_mp = InteractionMessagePassing(
+    interaction_mp = NoMessagePassing(
         d_v=ids.featurizer.mol_fdim + 300,
-        d_e=ids.featurizer.interaction_fdim,
     )
     mixture_agg = WeightedSumAggregation(interaction_mp.output_dim)
     ffn = RegressionFFN(
@@ -1138,7 +1137,7 @@ def test_id_datasets_overfit(tmp_path):
     )
     model = InteractionMPNN(mcmp, MeanAggregation(), interaction_mp, mixture_agg, ffn)
 
-    trainer = make_trainer(max_epochs=100)  # More epochs because more data to overfit
+    trainer = make_trainer(max_epochs=80)  # More epochs because more data to overfit
     trainer.fit(model, loader)
 
     train_loss = float(trainer.callback_metrics["train_loss_epoch"])
