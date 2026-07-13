@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import warnings
 
 import numpy as np
 from rdkit import Chem
@@ -25,17 +26,29 @@ class IDMoleculeDataset(MoleculeDataset):
     ----------
     data : list[IDMoleculeDatapoint]
         the datapoints comprising the dataset
+    featurizer : None, default=None
+        not used as MolGraphs are given via `mg_store`. Here for API compatability with
+        MoleculeDataset.
+    n_workers : None, default=None
+        not used as this class does not make MolGraphs
     mg_store : MolGraphStore | None, default=None
         the store providing precomputed molecular graphs. Required; a default of ``None`` is only
         used because it must follow the inherited :class:`MoleculeDataset` fields.
     """
 
     data: list[IDMoleculeDatapoint]
+    featurizer: None = None
+    n_workers: None = None
     mg_store: MolGraphStore | None = None
 
     def __post_init__(self):
         if self.mg_store is None:
             raise ValueError("`IDMoleculeDataset` requires argument `mg_store`")
+        if self.featurizer is not None or self.n_workers is not None:
+            warnings.warn(
+                "`featurizer` is ignored for IDMoleculeDataset. Give MolGraphs via `mg_store`.",
+                stacklevel=2,
+            )
         super().__post_init__()
 
     def _init_cache(self):
@@ -66,17 +79,29 @@ class IDMixtureDataset(MixtureDataset):
     ----------
     data : list[IDMixtureDatapoint]
         the datapoints comprising the dataset
+    featurizer : None, default=None
+        not used as MolGraphs are given via `mg_store`. Here for API compatability with
+        MixtureDataset.
+    n_workers : None, default=None
+        not used as this class does not make MolGraphs
     mg_store : MolGraphStore | None, default=None
         the store providing precomputed molecular graphs. Required; a default of ``None`` is only
         used because it must follow the inherited :class:`MixtureDataset` fields.
     """
 
     data: list[IDMixtureDatapoint]
+    featurizer: None = None
+    n_workers: None = None
     mg_store: MolGraphStore | None = None
 
     def __post_init__(self):
         if self.mg_store is None:
             raise ValueError("`IDMixtureDataset` requires argument `mg_store`")
+        if self.featurizer is not None or self.n_workers is not None:
+            warnings.warn(
+                "`featurizer` is ignored for IDMoleculeDataset. Give MolGraphs via `mg_store`.",
+                stacklevel=2,
+            )
         super().__post_init__()
 
     def _init_cache(self):
