@@ -191,10 +191,13 @@ class InteractionMPNN(MulticomponentMPNN):
             return torch.cumsum(tensor, dim=dim) - tensor
 
         B = len(big)
+        device = big.V.device
 
         # Get a count of how many molecules are in each batched graph for each datapoint.
         # One for normal BatchMolGraph's, but more for mixtures.
-        n_mol_per_dp_per_sub_bmg = torch.zeros(B, len(big.sub_bmgs), dtype=torch.long)
+        n_mol_per_dp_per_sub_bmg = torch.zeros(
+            B, len(big.sub_bmgs), dtype=torch.long, device=device
+        )
         for sub_bmg_idx, sub_bmg in enumerate(big.sub_bmgs):
             if isinstance(sub_bmg, BatchMixtureMolGraph):
                 n_mol_per_dp_per_sub_bmg[:, sub_bmg_idx] = torch.bincount(
@@ -219,11 +222,12 @@ class InteractionMPNN(MulticomponentMPNN):
                 # The line below is a faster version of
                 # torch.concat([torch.arange(n) for n in n_mol_in_mg_per_dp])
                 mol_i_in_mg = (
-                    torch.arange(i_mol_to_i_dp.numel()) - i_dp_starts_in_bmg[i_mol_to_i_dp]
+                    torch.arange(i_mol_to_i_dp.numel(), device=device)
+                    - i_dp_starts_in_bmg[i_mol_to_i_dp]
                 )
             else:
-                i_mol_to_i_dp = torch.arange(B)
-                mol_i_in_mg = torch.zeros(B, dtype=torch.long)
+                i_mol_to_i_dp = torch.arange(B, device=device)
+                mol_i_in_mg = torch.zeros(B, dtype=torch.long, device=device)
 
             sub_bmg_i_to_V_i = (
                 i_dp_start_in_V[i_mol_to_i_dp]
