@@ -19,6 +19,7 @@ from chemprop_contrib.mixtures.data.collate import (
     InteractionTrainingBatch,
 )
 from chemprop_contrib.mixtures.nn.agg import MixtureAggregation
+from chemprop_contrib.mixtures.utils import cumsum_exclude_current
 
 
 logger = logging.getLogger(__name__)
@@ -186,10 +187,6 @@ class InteractionMPNN(MulticomponentMPNN):
         2. The index in each datapoint where each graph starts. `i_sub_bmg_starts_per_dp_per_sub_bmg`
         3. The index in each graph where each molecule starts. `mol_i_in_mg`
         """
-
-        def cumsum_exclude_current(tensor: torch.Tensor, dim: int = 0) -> torch.Tensor:
-            return torch.cumsum(tensor, dim=dim) - tensor
-
         B = len(big)
         device = big.V.device
 

@@ -45,6 +45,7 @@ from .nn import (
     Set2SetAggregation,
     WeightedSumAggregation,
 )
+from .utils import cumsum_exclude_current
 
 __all__ = [
     "BatchInteractionGraph",
@@ -87,4 +88,5 @@ __all__ = [
     "describe_callable",
     "dict_to_molgraph",
     "molgraph_to_dict",
+    "cumsum_exclude_current",
 ]
