@@ -27,6 +27,8 @@ Each package includes tests, which can be used to demonstrate the use of the pac
  - `moe_regressor`: Implements the ["Adaptive Mixture of Local Experts"](https://doi.org/10.1162/neco.1991.3.1.79) model for regression.
  - `mcp`: Model context protocol for connecting Chemprop with Large Language Models (AI).
  - `set2set`: Chemprop-compatible implementation of the Set2Set aggregation function.
+ - `sklearn_integration`: Scikit-learn style wrappers around Chemprop training and predicting routines.
+ - `mixtures`: Order invariant architectures that accept any number of inputs. Useful for mixtures of molecules. 
 
 # Contributing
 
