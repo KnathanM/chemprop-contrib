@@ -117,7 +117,6 @@ class InteractionMPNN(MulticomponentMPNN):
         )
         self.hparams["interaction_mp"] = interaction_mp.hparams
         self.hparams["mixture_agg"] = mixture_agg.hparams
-        self.hparams["interact_only_mixture"] = interact_only_mixture
 
         self.interaction_mp = interaction_mp
         self.mixture_agg = mixture_agg
