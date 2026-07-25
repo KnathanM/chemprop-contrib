@@ -4,6 +4,7 @@ import torch
 from torch import Tensor, nn
 
 from chemprop.nn.hparams import HasHParams
+from chemprop.nn.utils import get_activation_function
 
 
 class MixtureAggregation(nn.Module, HasHParams):
@@ -201,11 +202,12 @@ class DeepsetsAggregation(MixtureAggregation):
         hidden_dim: int | None = None,
         n_hidden_layers: int = 2,
         bias: bool = False,
-        activation: nn.Module = nn.ReLU(),
+        activation: str | nn.Module = "relu",
     ) -> nn.Sequential:
         if n_hidden_layers == 0:
             return nn.Sequential(nn.Linear(dim, dim, bias=bias))
 
+        activation = get_activation_function(activation)
         hidden_dim = hidden_dim or dim
         layers = [nn.Linear(dim, hidden_dim, bias=bias), activation]
         for _ in range(n_hidden_layers - 1):
