@@ -58,8 +58,7 @@ from chemprop_contrib.mixtures.nn import (
 
 @pytest.fixture(autouse=True)
 def _seed():
-    torch.manual_seed(0)
-    np.random.seed(0)
+    pl.seed_everything(0)
 
 
 @pytest.fixture
