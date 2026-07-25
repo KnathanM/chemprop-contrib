@@ -11,7 +11,7 @@ from chemprop.utils import make_mol
 
 
 @dataclass
-class _V_f_E_f_V_d:
+class _NodeEdgeExtrasMixin:
     V_f: np.ndarray | None = None
     E_f: np.ndarray | None = None
     V_d: np.ndarray | None = None
@@ -51,7 +51,7 @@ class _MixtureDatapointMixin:
 
 
 @dataclass
-class MixtureDatapoint(_V_f_E_f_V_d, _DatapointMixin, _MixtureDatapointMixin):
+class MixtureDatapoint(_NodeEdgeExtrasMixin, _DatapointMixin, _MixtureDatapointMixin):
     """A :class:`MixtureDatapoint` represents a mixture of molecules, i.e. where the order of input
     molecules does not matter and the input can have any number of molecules."""
 
@@ -93,7 +93,7 @@ class MixtureDatapoint(_V_f_E_f_V_d, _DatapointMixin, _MixtureDatapointMixin):
 
 
 @dataclass
-class InteractionDatapoint(_V_f_E_f_V_d, _DatapointMixin):
+class InteractionDatapoint(_NodeEdgeExtrasMixin, _DatapointMixin):
     """An :class:`InteractionDatapoint` stores extra molecule (node) and interaction (edge)
     features/descriptors for an interaction graph between molecules in a datapoint. While it also
     holds training target information, it is not intended to be used alone. When combined with

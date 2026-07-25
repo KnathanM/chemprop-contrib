@@ -4,7 +4,7 @@ import numpy as np
 
 from chemprop.data.datapoints import _DatapointMixin
 
-from chemprop_contrib.mixtures.data.datapoints import _V_f_E_f_V_d
+from chemprop_contrib.mixtures.data.datapoints import _NodeEdgeExtrasMixin
 
 
 @dataclass
@@ -13,7 +13,7 @@ class _IDMoleculeDatapointMixin:
 
 
 @dataclass
-class IDMoleculeDatapoint(_V_f_E_f_V_d, _DatapointMixin, _IDMoleculeDatapointMixin):
+class IDMoleculeDatapoint(_NodeEdgeExtrasMixin, _DatapointMixin, _IDMoleculeDatapointMixin):
     """A single-molecule datapoint that references its molecule by integer ID. Instead of storing a
     :class:`Chem.Mol`, this datapoint holds a ``mol_id`` used to look up the precomputed graph in a
     :class:`MolGraphStore`.
@@ -29,7 +29,7 @@ class _IDMixtureDatapointMixin:
 
 
 @dataclass
-class IDMixtureDatapoint(_V_f_E_f_V_d, _DatapointMixin, _IDMixtureDatapointMixin):
+class IDMixtureDatapoint(_NodeEdgeExtrasMixin, _DatapointMixin, _IDMixtureDatapointMixin):
     """A mixture datapoint that references its component molecules by integer IDs. Instead of
     storing :class:`Chem.Mol` objects, this datapoint holds a list of ``mol_id`` used to look up the
     precomputed graph in a :class:`MolGraphStore`.
