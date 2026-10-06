@@ -34,7 +34,7 @@ class MixtureDatum(NamedTuple):
 class MixtureDataset(MoleculeDataset):
     data: list[MixtureDatapoint]
 
-    def __getitem__(self, idx: int) -> MixtureMolGraph:
+    def __getitem__(self, idx: int) -> MixtureDatum:
         d = self.data[idx]
         mg = self.mg_cache[idx]
         molecule_sizes = self.get_molecule_sizes(idx)

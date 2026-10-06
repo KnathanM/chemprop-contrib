@@ -6,6 +6,8 @@ from torch import Tensor, nn
 from chemprop.nn.hparams import HasHParams
 from chemprop.nn.utils import get_activation_function
 
+from chemprop_contrib.mixtures.utils import cumsum_exclude_current
+
 
 class MixtureAggregation(nn.Module, HasHParams):
     """A `MixtureAggregation` aggregates molecule learned fingerprints into fixed-length embedding.
@@ -143,7 +145,7 @@ class ConcatAggregation(MixtureAggregation):
             )
 
         # The indices where each mixture's molecules start in the batched H
-        i_mol_start = torch.cumsum(n_mol_per_mix, 0) - n_mol_per_mix
+        i_mol_start = cumsum_exclude_current(n_mol_per_mix)
         # The indices of each molecule in their respective mixture
         # Faster equivalent of torch.concat([torch.arange(n) for n in n_mol_per_mix])
         i_mol_in_mix = torch.arange(N, device=device) - i_mol_start[batch_mixture]
@@ -166,9 +168,7 @@ class WeightedSumAggregation(MixtureAggregation):
 
     def forward(self, H: Tensor, batch_mixture: Tensor, w: Tensor) -> Tensor:
         B = int(batch_mixture.max().item()) + 1
-        return torch.zeros((B, H.shape[1]), device=H.device, dtype=H.dtype).index_add_(
-            0, batch_mixture, w.unsqueeze(1) * H
-        )
+        return H.new_zeros((B, H.shape[1])).index_add_(0, batch_mixture, w.unsqueeze(1) * H)
 
 
 class DeepsetsAggregation(MixtureAggregation):
@@ -186,7 +186,7 @@ class DeepsetsAggregation(MixtureAggregation):
         number of hidden layers in the MLPs
     bias : bool, default=False
         whether to include a bias in the MLP layers
-    activation : nn.Module, default=nn.ReLU()
+    activation : str | nn.Module, default="relu"
         the non-linear activation function to use between layers in the MLPs
     """
 
@@ -217,7 +217,7 @@ class DeepsetsAggregation(MixtureAggregation):
 
     def forward(self, H: Tensor, batch_mixture: Tensor, w: Tensor) -> Tensor:
         B = int(batch_mixture.max().item()) + 1
-        pooled = torch.zeros((B, H.shape[1]), device=H.device, dtype=H.dtype).index_add_(
+        pooled = H.new_zeros((B, H.shape[1])).index_add_(
             0, batch_mixture, self.MLP_local(w.unsqueeze(1) * H)
         )
         return self.MLP_global(pooled)
@@ -236,7 +236,6 @@ class AttentiveAggregation(MixtureAggregation):
 
     def forward(self, H: Tensor, batch_mixture: Tensor, w: Tensor) -> Tensor:
         B = int(batch_mixture.max().item()) + 1
-        device = H.device
 
         w_H = w.unsqueeze(1) * H
         logits = self.W_a(w_H).squeeze(-1)
@@ -247,15 +246,13 @@ class AttentiveAggregation(MixtureAggregation):
         # Alternatively, we could use something like
         # `torch_scatter.scatter_softmax(logits, batch_mixture, dim=0, dim_size=B)`, but that is
         # another dependency.
-        max_per_b = torch.full((B,), float("-inf"), device=device)
+        max_per_b = logits.new_full((B,), float("-inf"))
         max_per_b.scatter_reduce_(0, batch_mixture, logits, reduce="amax", include_self=True)
         exps = torch.exp(logits - max_per_b[batch_mixture])
-        sum_per_b = torch.zeros(B, device=device).index_add_(0, batch_mixture, exps)
+        sum_per_b = logits.new_zeros(B).index_add_(0, batch_mixture, exps)
         alphas = exps / sum_per_b[batch_mixture]
 
-        return torch.zeros((B, H.shape[1]), device=device, dtype=H.dtype).index_add_(
-            0, batch_mixture, alphas.unsqueeze(-1) * w_H
-        )
+        return H.new_zeros((B, H.shape[1])).index_add_(0, batch_mixture, alphas.unsqueeze(-1) * w_H)
 
 
 class Set2SetAggregation(MixtureAggregation):
@@ -289,7 +286,6 @@ class Set2SetAggregation(MixtureAggregation):
 
     def forward(self, H: Tensor, batch_mixture: Tensor, w: Tensor) -> Tensor:
         B = int(batch_mixture.max().item()) + 1
-        device = H.device
         dim = H.shape[1]
 
         w_H = w.unsqueeze(1) * H
@@ -307,15 +303,13 @@ class Set2SetAggregation(MixtureAggregation):
             logits = (w_H * q[batch_mixture]).sum(dim=1)
 
             # See note about manual softmax in `AttentiveAggregation.forward`
-            max_per_b = torch.full((B,), float("-inf"), device=device)
+            max_per_b = logits.new_full((B,), float("-inf"))
             max_per_b.scatter_reduce_(0, batch_mixture, logits, reduce="amax", include_self=True)
             exps = torch.exp(logits - max_per_b[batch_mixture])
-            sum_per_b = torch.zeros(B, device=device).index_add_(0, batch_mixture, exps)
+            sum_per_b = logits.new_zeros(B).index_add_(0, batch_mixture, exps)
             alphas = exps / sum_per_b[batch_mixture]
 
-            r = torch.zeros((B, dim), device=device, dtype=H.dtype).index_add_(
-                0, batch_mixture, alphas.unsqueeze(-1) * w_H
-            )
+            r = H.new_zeros((B, dim)).index_add_(0, batch_mixture, alphas.unsqueeze(-1) * w_H)
             q_star = torch.cat([q, r], dim=1)
 
         return q_star

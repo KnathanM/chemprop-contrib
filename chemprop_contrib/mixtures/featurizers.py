@@ -30,7 +30,7 @@ class HydrogenBondFeaturizer(VectorFeaturizer[Sequence[Mol]]):
     resulting integer is one-hot encoded over ``[0, max_hbond_num]``, with an extra bit for values
     exceeding ``max_hbond_num``.
 
-    Note that this featurizer uses `rdMolDescriptors.CalcNumHBA` and `rdMolDescriptors.CalcNumHBA`,
+    Note that this featurizer uses `rdMolDescriptors.CalcNumHBA` and `rdMolDescriptors.CalcNumHBD`,
     which gives `0` for water.
 
     Parameters

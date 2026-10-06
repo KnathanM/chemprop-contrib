@@ -99,7 +99,7 @@ class IDMixtureDataset(MixtureDataset):
             raise ValueError("`IDMixtureDataset` requires argument `mg_store`")
         if self.featurizer is not None or self.n_workers is not None:
             warnings.warn(
-                "`featurizer` is ignored for IDMoleculeDataset. Give MolGraphs via `mg_store`.",
+                "`featurizer` is ignored for IDMixtureDataset. Give MolGraphs via `mg_store`.",
                 stacklevel=2,
             )
         super().__post_init__()

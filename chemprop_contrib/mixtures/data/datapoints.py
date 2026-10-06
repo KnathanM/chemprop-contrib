@@ -73,6 +73,8 @@ class MixtureDatapoint(_NodeEdgeExtrasMixin, _DatapointMixin, _MixtureDatapointM
     molecules in the mixture. If a single float, it is applied to all molecules."""
 
     def __post_init__(self):
+        if len(self.mols) == 0:
+            raise ValueError("a mixture must contain at least one molecule")
         # Combine the molecules into a single Chem.Mol to give to the MolGraph featurizer.
         mixture_mol = Chem.RWMol()
         for m in self.mols:
