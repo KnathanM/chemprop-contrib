@@ -1,0 +1,10 @@
+data/dataset-poly_chemprop_small.csv and data/test_polymer.csv are taken from the original polymer
+PR to Chemprop (https://github.com/chemprop/chemprop/pull/1214, tests/data/regression/polymer/ and
+tests/data/). Both are subsets of the vinyl copolymer electron affinity (EA) and ionization potential
+(IP) dataset from M. Aldeghi and C. W. Coley, "A graph representation of molecular ensembles for
+polymer property prediction", Chem. Sci., 2022, 13, 10486-10498, DOI 10.1039/D2SC02839E. The full
+dataset is available at
+https://github.com/coleygroup/polymer-chemprop-data/blob/main/datasets/vipea/chemprop_inputs/dataset-poly_chemprop.csv
+
+data/config.toml is the training config from the same PR, with data-path pointing to the file above
+(relative to the root of the chemprop-contrib repository, where the tests are run from).
