@@ -1,4 +1,4 @@
-data-path = chemprop_contrib/polymers/tests/data/dataset-poly_chemprop_small.csv
+data-path = chemprop_contrib/polymers/tests/data/regression/polymer/dataset-poly_chemprop_small.csv
 output-dir = trained_model
 epochs = 1
 num-workers = 0

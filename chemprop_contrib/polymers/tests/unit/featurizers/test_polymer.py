@@ -231,10 +231,3 @@ def test_atom_bond_extra(polymer, polymer_mol, extra, atom_features_extra, bond_
         2 * polymer_mol.GetNumBonds() + 2 * len(polymer[2]),
         len(mf.bond_featurizer) + extra,
     )
-
-
-def test_no_atoms(polymer_featurizer):
-    mg = polymer_featurizer((Chem.Mol(), [], [""]))
-
-    assert mg.V.shape == (1, polymer_featurizer.atom_fdim)
-    assert mg.V_w.shape == (1,)

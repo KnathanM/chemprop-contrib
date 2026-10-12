@@ -85,6 +85,12 @@ class wMPNN(MPNN):
         H_v = self.message_passing(bmg, V_d)
         # chemprop's aggregations don't accept atom weights, so the weighted mean is computed
         # here. The other aggregations ignored V_w in the original PR.
+        # NOTE:
+        # - subclasses of MeanAggregation also take this branch, so their forward() is
+        #   bypassed, as are any hooks registered on self.agg
+        # - no aggregation receives V_w; a custom weight-aware aggregation needs changes here
+        # - _weighted_mean is a copy of the PR's MeanAggregation logic and won't track
+        #   upstream changes to MeanAggregation
         if isinstance(self.agg, MeanAggregation):
             H = _weighted_mean(H_v, bmg.batch, bmg.V_w, self.agg.dim)
         else:

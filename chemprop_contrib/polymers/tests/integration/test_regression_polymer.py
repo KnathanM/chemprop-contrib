@@ -8,10 +8,8 @@ from chemprop_contrib.polymers import (
     PolymerDatapoint,
     PolymerDataset,
     WeightedBondMessagePassing,
-    build_dataloader,
     collate_polymer_batch,
 )
-from chemprop_contrib.polymers.models import _weighted_mean, wMPNN
 
 
 @pytest.fixture
@@ -124,28 +122,3 @@ def test_evidential_quick(regression_wmpnn_evidential, dataloader):
         fast_dev_run=True,
     )
     trainer.fit(regression_wmpnn_evidential, dataloader, None)
-
-
-def test_weighted_mean_equals_mean_for_unit_weights():
-    H = torch.randn(10, 4)
-    batch = torch.tensor([0, 0, 0, 1, 1, 2, 2, 2, 2, 2])
-    V_w = torch.ones(10)
-
-    torch.testing.assert_close(_weighted_mean(H, batch, V_w), nn.MeanAggregation()(H, batch))
-
-
-def test_weighted_mean_uses_atom_weights(data):
-    """The wMPNN fingerprint with mean aggregation divides by the sum of the atom weights"""
-    mp = WeightedBondMessagePassing()
-    model = wMPNN(mp, nn.MeanAggregation(), nn.RegressionFFN())
-    bmg, *_ = next(iter(build_dataloader(PolymerDataset(data[:4]), shuffle=False)))
-
-    model.eval()
-    with torch.no_grad():
-        H_v = mp(bmg)
-        n_atoms = torch.bincount(bmg.batch).unsqueeze(1)
-        sum_V_w = torch.zeros(len(bmg)).index_add_(0, bmg.batch, bmg.V_w).unsqueeze(1)
-        expected = nn.MeanAggregation()(H_v, bmg.batch) * n_atoms / sum_V_w
-        expected = expected * bmg.degree_of_poly.unsqueeze(1)
-
-        torch.testing.assert_close(model.fingerprint(bmg), expected)

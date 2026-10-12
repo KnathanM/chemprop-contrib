@@ -150,15 +150,18 @@ class PolymerMolGraphFeaturizer(_MolGraphFeaturizerMixin, GraphFeaturizer[Polyme
             counter[idx1] += float(w21)
             counter[idx2] += float(w12)
 
+
+        # NOTE: This validation check is in polymer-chemprop, but incorrect as 
+        # `np.isclose(...) is False` is never True (np.isclose returns np.bool_).
+        # If it is changed to `not np.isclose(...)` then polymers with self-loop rules (e.g. `1-1`)
+        # are rejected as those rules are counted twice.
+
         # Validate input: sum of the incoming weights should be 1 for each vertex
-        for k, v in counter.items():
-            # NOTE: `np.isclose(...) is False` is never True (np.isclose returns np.bool_), so this
-            # check is inactive, as in the original PR and polymer-chemprop. It is kept that way
-            # because self-loop rules (e.g. `1-1`) are counted twice, which would reject valid inputs.
-            if np.isclose(v, 1.0) is False:
-                raise ValueError(
-                    f"Sum of weights of incoming stochastic edges should be 1 -- found {v} for [*:{k}]"
-                )
+        # for k, v in counter.items():
+        #     if np.isclose(v, 1.0) is False:
+        #         raise ValueError(
+        #             f"Sum of weights of incoming stochastic edges should be 1 -- found {v} for [*:{k}]"
+        #         )
 
         return polymer_info, 1.0 + np.log10(Xn)
 
