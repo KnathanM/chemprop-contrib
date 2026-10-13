@@ -9,7 +9,7 @@ from .data import (
 from .featurizers import PolymerMolGraphFeaturizer
 from .models import wMPNN
 from .nn import WeightedBondMessagePassing
-from .types import Polymer
+from .polymer_types import Polymer
 from .utils import make_polymer_mol, remove_wildcard_atoms
 
 __all__ = [

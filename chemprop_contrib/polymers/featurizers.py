@@ -8,7 +8,7 @@ from rdkit import Chem
 from chemprop.featurizers.base import GraphFeaturizer
 from chemprop.featurizers.molgraph.mixins import _MolGraphFeaturizerMixin
 from chemprop_contrib.polymers.data.molgraph import WeightedMolGraph
-from chemprop_contrib.polymers.types import Polymer
+from chemprop_contrib.polymers.polymer_types import Polymer
 from chemprop_contrib.polymers.utils import remove_wildcard_atoms
 
 

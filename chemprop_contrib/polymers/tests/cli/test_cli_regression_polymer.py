@@ -76,6 +76,8 @@ def test_predict_quick(monkeypatch, data_path, model_path):
         model_path,
         "--polymer-columns",
         "poly_chemprop_input",
+        "--accelerator",
+        "cpu",
     ]
 
     with monkeypatch.context() as m:

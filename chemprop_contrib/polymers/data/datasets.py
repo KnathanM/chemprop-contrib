@@ -6,7 +6,7 @@ from chemprop.featurizers.molgraph.cache import MolGraphCache, MolGraphCacheOnTh
 from chemprop_contrib.polymers.data.datapoints import PolymerDatapoint
 from chemprop_contrib.polymers.data.molgraph import WeightedMolGraph
 from chemprop_contrib.polymers.featurizers import PolymerMolGraphFeaturizer
-from chemprop_contrib.polymers.types import Polymer
+from chemprop_contrib.polymers.polymer_types import Polymer
 
 
 @dataclass
