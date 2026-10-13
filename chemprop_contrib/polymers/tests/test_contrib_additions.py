@@ -122,6 +122,8 @@ def test_predict_matches_python(monkeypatch, data_path, model_path, tmp_path):
         "poly_chemprop_input",
         "--output",
         str(tmp_path / "preds.csv"),
+        "--accelerator",
+        "cpu",
     ]
 
     with monkeypatch.context() as m:
